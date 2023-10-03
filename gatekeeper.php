@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GateKeeper
  * Description: Advanced user access control plugin for WordPress.
- * Version: 1.0.0
+ * Version: 0.01.05
  * Author: Zeus Eternal
  */
 
