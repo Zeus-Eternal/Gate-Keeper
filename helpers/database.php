@@ -85,3 +85,122 @@ function gatekeeper_create_tables() {
     dbDelta($user_permissions_sql);
     dbDelta($relationships_sql);
 }
+<?php
+/**
+ * Function to create necessary database tables during plugin activation
+ */
+function gatekeeper_create_tables() {
+    global $wpdb;
+
+    // Define the plugin's table name prefix
+    $table_prefix = 'gatekeeper_';
+
+    // Define table names with the plugin's naming convention
+    $invite_keys_table = $wpdb->prefix . $table_prefix . 'invite_keys';
+    $user_role_relationships_table = $wpdb->prefix . $table_prefix . 'user_role_relationships';
+    $user_roles_table = $wpdb->prefix . $table_prefix . 'user_roles';
+    $user_permissions_table = $wpdb->prefix . $table_prefix . 'user_permissions';
+    $relationships_table = $wpdb->prefix . $table_prefix . 'user_relationships';
+
+    // SQL query to create the invite keys table
+    $invite_keys_sql = "
+    CREATE TABLE IF NOT EXISTS $invite_keys_table (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        invite_key VARCHAR(255) NOT NULL,
+        role VARCHAR(255) NOT NULL,
+        inviter INT NOT NULL,
+        invitee INT NOT NULL,
+        usage_limit INT NOT NULL,
+        is_expiry BOOL NOT NULL,
+        expiry_date DATETIME NOT NULL,
+        status VARCHAR(20) NOT NULL,
+        accepted BOOL NOT NULL,
+        accepted_at TINYINT(1) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB;
+    ";
+
+    // SQL query to create the user role relationships table
+    $user_role_relationships_sql = "
+    CREATE TABLE IF NOT EXISTS $user_role_relationships_table (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        role_id INT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_user_role (user_id, role_id)
+    ) ENGINE=InnoDB;
+    ";
+
+    // SQL query to create the user roles table
+    $user_roles_sql = "
+    CREATE TABLE IF NOT EXISTS $user_roles_table (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        role_name VARCHAR(50) NOT NULL,
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB;
+    ";
+
+    // SQL query to create the user permissions table
+    $user_permissions_sql = "
+    CREATE TABLE IF NOT EXISTS $user_permissions_table (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        permission_name VARCHAR(50) NOT NULL,
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB;
+    ";
+
+    // SQL query to create the user relationships table
+    $relationships_sql = "
+    CREATE TABLE IF NOT EXISTS $relationships_table (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        inviter_user_id INT NOT NULL,
+        invitee_user_id INT NOT NULL,
+        relationship_type VARCHAR(20) NOT NULL,
+        invite_sent_at DATETIME,
+        invite_status VARCHAR(20),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_relationship (inviter_user_id, invitee_user_id)
+    ) ENGINE=InnoDB;
+    ";
+
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+
+    // Create the tables
+    dbDelta($invite_keys_sql);
+    dbDelta($user_role_relationships_sql);
+    dbDelta($user_roles_sql);
+    dbDelta($user_permissions_sql);
+    dbDelta($relationships_sql);
+}
+
+/**
+ * Function to remove database tables during plugin deactivation
+ */
+function gatekeeper_remove_tables() {
+    global $wpdb;
+
+    // Define the plugin's table name prefix
+    $table_prefix = 'gatekeeper_';
+
+    // Define table names with the plugin's naming convention
+    $invite_keys_table = $wpdb->prefix . $table_prefix . 'invite_keys';
+    $user_role_relationships_table = $wpdb->prefix . $table_prefix . 'user_role_relationships';
+    $user_roles_table = $wpdb->prefix . $table_prefix . 'user_roles';
+    $user_permissions_table = $wpdb->prefix . $table_prefix . 'user_permissions';
+    $relationships_table = $wpdb->prefix . $table_prefix . 'user_relationships';
+
+    // SQL query to drop the invite keys table
+    $wpdb->query("DROP TABLE IF EXISTS $invite_keys_table");
+    // Add similar queries for other tables if needed
+}
+
+// Function to check if the database engine supports InnoDB (required for foreign keys)
+function gatekeeper_supports_innodb() {
+    global $wpdb;
+
+    $database_engine = strtolower($wpdb->get_var("SHOW ENGINES"));
+    
+    return (strpos($database_engine, 'innodb') !== false);
+}
