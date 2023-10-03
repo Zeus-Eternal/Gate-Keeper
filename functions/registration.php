@@ -1,34 +1,47 @@
 <?php
-// Shortcode handler for registration form
-function gatekeeper_registration_shortcode() {
-    ob_start();
-
+// Function to process registration form submission
+function gatekeeper_process_registration() {
     if (isset($_POST['register'])) {
-        $registration_result = gatekeeper_process_registration();
+        $errors = new WP_Error();
 
-        if (is_wp_error($registration_result)) {
-            foreach ($registration_result->get_error_messages() as $error_message) {
-                echo '<p class="error">' . esc_html($error_message) . '</p>';
-            }
-        } elseif ($registration_result === true) {
-            echo '<p class="success">Registration successful! You can now log in.</p>';
+        $username = sanitize_user($_POST['username']);
+        $email = sanitize_email($_POST['email']);
+        $password = sanitize_text_field($_POST['password']);
+
+        if (empty($username)) {
+            $errors->add('username_required', 'Username is required.');
         }
-    } else {
-        ?>
-        <form id="registration-form" method="post" action="">
-            <label for="username">Username:</label>
-            <input type="text" id="username" name="username" required>
 
-            <label for="email">Email:</label>
-            <input type="email" id="email" name="email" required>
+        if (empty($email)) {
+            $errors->add('email_required', 'Email is required.');
+        } elseif (!is_email($email)) {
+            $errors->add('invalid_email', 'Invalid email address.');
+        }
 
-            <label for="password">Password:</label>
-            <input type="password" id="password" name="password" required>
+        if (empty($password)) {
+            $errors->add('password_required', 'Password is required.');
+        }
 
-            <input type="submit" name="register" value="Register">
-        </form>
-        <?php
+        if ($errors->has_errors()) {
+            return $errors;
+        }
+
+        $user_data = array(
+            'user_login' => $username,
+            'user_email' => $email,
+            'user_pass' => $password,
+        );
+
+        $user_id = wp_insert_user($user_data);
+
+        if (!is_wp_error($user_id)) {
+            wp_set_auth_cookie($user_id, true);
+            wp_redirect('your-success-page-url');
+            exit;
+        } else {
+            return $user_id;
+        }
     }
 
-    return ob_get_clean();
+    return '';
 }
