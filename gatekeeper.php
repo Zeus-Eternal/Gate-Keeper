@@ -49,9 +49,6 @@ function gatekeeper_create_tables() {
     // Define table names with the plugin's naming convention
     $invite_keys_table = $wpdb->prefix . $table_prefix . 'invite_keys';
     $user_role_relationships_table = $wpdb->prefix . $table_prefix . 'user_role_relationships';
-    $user_roles_table = $wpdb->prefix . $table_prefix . 'user_roles';
-    $user_permissions_table = $wpdb->prefix . $table_prefix . 'user_permissions';
-    $relationships_table = $wpdb->prefix . $table_prefix . 'user_relationships';
 
     // Ensure we have access to the $wpdb->query method
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
@@ -90,48 +87,12 @@ function gatekeeper_create_tables() {
     ) ENGINE=InnoDB;
     ";
 
-    // SQL query to create the user roles table
-    $user_roles_sql = "
-    CREATE TABLE IF NOT EXISTS $user_roles_table (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        role_name VARCHAR(50) NOT NULL,
-        description TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB;
-    ";
-
-    // SQL query to create the user permissions table
-    $user_permissions_sql = "
-    CREATE TABLE IF NOT EXISTS $user_permissions_table (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        permission_name VARCHAR(50) NOT NULL,
-        description TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB;
-    ";
-
-    // SQL query to create the user relationships table
-    $relationships_sql = "
-    CREATE TABLE IF NOT EXISTS $relationships_table (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        inviter_user_id INT NOT NULL,
-        invitee_user_id INT NOT NULL,
-        relationship_type VARCHAR(20) NOT NULL,
-        invite_sent_at DATETIME,
-        invite_status VARCHAR(20),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY unique_relationship (inviter_user_id, invitee_user_id),
-        FOREIGN KEY (inviter_user_id) REFERENCES $wpdb->users(ID),
-        FOREIGN KEY (invitee_user_id) REFERENCES $wpdb->users(ID)
-    ) ENGINE=InnoDB;
-    ";
+    // Add similar queries for other tables if needed
 
     // Create the tables
     dbDelta($invite_keys_sql);
     dbDelta($user_role_relationships_sql);
-    dbDelta($user_roles_sql);
-    dbDelta($user_permissions_sql);
-    dbDelta($relationships_sql);
+    // Add similar dbDelta calls for other tables if needed
 }
 
 /**
@@ -149,6 +110,7 @@ function gatekeeper_remove_tables() {
 
     // SQL query to drop the invite keys table
     $wpdb->query("DROP TABLE IF EXISTS $invite_keys_table");
+    $wpdb->query("DROP TABLE IF EXISTS $user_role_relationships_table");
     // Add similar queries for other tables if needed
 }
 
@@ -356,48 +318,6 @@ function gatekeeper_process_invite() {
     // If the form hasn't been submitted yet, you can return an empty string here.
     return '';
 }
-/**
- * Activation Hook for GateKeeper Plugin
- */
-function gatekeeper_plugin_activated() {
-    // Check if the current user has the required capability to activate the plugin
-    if (!current_user_can('activate_plugins')) {
-        wp_die(__('You do not have sufficient permissions to activate this plugin.'));
-    }
-
-    // Check if the WordPress version is compatible with the plugin (adjust version number as needed)
-    if (version_compare(get_bloginfo('version'), '5.0', '<')) {
-        wp_die(__('This plugin requires WordPress version 5.0 or higher. Please update your WordPress installation.'));
-    }
-
-    // Check if the database engine supports InnoDB (required for foreign keys)
-    if (!gatekeeper_supports_innodb()) {
-        wp_die(__('Your database engine does not support InnoDB, which is required for this plugin. Please switch to a compatible database.'));
-    }
-
-    // Create the necessary database tables
-    if (gatekeeper_create_tables()) {
-        // Tables created successfully, set default options
-        gatekeeper_set_default_options();
-    } else {
-        // Error occurred during table creation
-        wp_die(__('An error occurred while creating the database tables for the plugin. Please check your database configuration and try again.'));
-    }
-}
-
-/**
- * Function to check if the database engine supports InnoDB (required for foreign keys)
- */
-function gatekeeper_supports_innodb() {
-    global $wpdb;
-
-    $database_engine = strtolower($wpdb->get_var("SHOW ENGINES"));
-    
-    return (strpos($database_engine, 'innodb') !== false);
-}
-
-// Activate the plugin on hook
-register_activation_hook(__FILE__, 'gatekeeper_plugin_activated');
 
 /**
  * Function to send an invitation email
