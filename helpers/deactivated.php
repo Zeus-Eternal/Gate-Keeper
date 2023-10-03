@@ -1,5 +1,6 @@
 <?php
-// Deactivation Hook for GateKeeper Plugin
+
+// Function to remove database tables during plugin deactivation
 function gatekeeper_plugin_deactivated() {
     gatekeeper_remove_tables();
 }
@@ -24,3 +25,4 @@ function gatekeeper_remove_tables() {
 
     return true;
 }
+
