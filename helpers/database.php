@@ -30,7 +30,7 @@ function gatekeeper_create_tables() {
         FOREIGN KEY (role_id) REFERENCES $user_roles_table(id),
         FOREIGN KEY (inviter) REFERENCES $wpdb->users(ID),
         FOREIGN KEY (invitee) REFERENCES $wpdb->users(ID)
-    ) ENGINE=InnoDB;
+    ) ENGINE=MyISAM;
     ";
 
     $user_role_relationships_sql = "
@@ -42,7 +42,7 @@ function gatekeeper_create_tables() {
         UNIQUE KEY unique_user_role (user_id, role_id),
         FOREIGN KEY (user_id) REFERENCES $wpdb->users(ID),
         FOREIGN KEY (role_id) REFERENCES $user_roles_table(id)
-    ) ENGINE=InnoDB;
+    ) ENGINE=MyISAM;
     ";
 
     $user_roles_sql = "
@@ -51,7 +51,7 @@ function gatekeeper_create_tables() {
         role_name VARCHAR(50) NOT NULL,
         description TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB;
+    ) ENGINE=MyISAM;
     ";
 
     $user_permissions_sql = "
@@ -60,7 +60,7 @@ function gatekeeper_create_tables() {
         permission_name VARCHAR(50) NOT NULL,
         description TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB;
+    ) ENGINE=MyISAM;
     ";
 
     $relationships_sql = "
@@ -75,7 +75,7 @@ function gatekeeper_create_tables() {
         UNIQUE KEY unique_relationship (inviter_user_id, invitee_user_id),
         FOREIGN KEY (inviter_user_id) REFERENCES $wpdb->users(ID),
         FOREIGN KEY (invitee_user_id) REFERENCES $wpdb->users(ID)
-    ) ENGINE=InnoDB;
+    ) ENGINE=MyISAM;
     ";
 
     dbDelta($invite_keys_sql);
