@@ -218,3 +218,64 @@ function gatekeeper_remove_options() {
         delete_option($option_name);
     }
 }
+
+// Function to add the invite key to the registration form
+function gatekeeper_add_invite_key_field() {
+    ?>
+    <p>
+        <label for="invite_key"><?php _e('Invite Key', 'gatekeeper'); ?><br />
+            <input type="text" name="invite_key" id="invite_key" class="input" value="<?php echo esc_attr(wp_unslash(isset($_POST['invite_key']) ? $_POST['invite_key'] : '')); ?>" size="25" required />
+        </label>
+    </p>
+    <?php
+}
+add_action('register_form', 'gatekeeper_add_invite_key_field');
+
+// Function to validate the invite key during registration
+function gatekeeper_validate_invite_key($errors, $sanitized_user_login, $user_email) {
+    if (empty($_POST['invite_key'])) {
+        $errors->add('invite_key_empty', __('Please enter an invite key.', 'gatekeeper'));
+    } else {
+        $invite_key = sanitize_text_field($_POST['invite_key']);
+        
+        // Add your validation logic here
+        if (!gatekeeper_is_valid_invite_key($invite_key)) {
+            $errors->add('invalid_invite_key', __('Invalid invite key.', 'gatekeeper'));
+        }
+    }
+
+    return $errors;
+}
+add_filter('registration_errors', 'gatekeeper_validate_invite_key', 10, 3);
+
+// Function to handle registration errors and display alerts
+function gatekeeper_handle_registration_errors($user_id) {
+    if (is_wp_error($user_id)) {
+        $errors = $user_id->get_error_messages();
+
+        foreach ($errors as $error) {
+            echo '<div class="error">' . esc_html($error) . '</div>';
+        }
+    }
+}
+add_action('register_post', 'gatekeeper_handle_registration_errors', 10, 3);
+
+// Function to check if the invite key is valid (You need to implement this)
+function gatekeeper_is_valid_invite_key($invite_key) {
+    global $wpdb;
+
+    // Define the invite keys table
+    $invite_keys_table = $wpdb->prefix . 'gatekeeper_invite_keys';
+
+    // Check if the invite key exists in the database and is valid
+    $query = $wpdb->prepare(
+        "SELECT id FROM $invite_keys_table WHERE invite_key = %s AND status = 'pending' AND expiry_date >= NOW()",
+        $invite_key
+    );
+
+    $result = $wpdb->get_var($query);
+
+    // Return true if the invite key is found and valid, otherwise false
+    return !empty($result);
+}
+
