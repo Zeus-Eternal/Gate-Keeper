@@ -20,6 +20,9 @@ function gatekeeper_generate_invite_key($length = 5) {
 register_activation_hook(__FILE__, 'gatekeeper_plugin_activate');
 register_deactivation_hook(__FILE__, 'gatekeeper_plugin_deactivate');
 
+// Include fucntions
+include_once(plugin_dir_path(__FILE__) . 'admin/settings.php');
+
 // Include scripts and styles for SPA
 function gatekeeper_enqueue_scripts() {
     wp_enqueue_script('gatekeeper-app', plugin_dir_url(__FILE__) . 'js/app.js', array('jquery'), '1.0.0', true);
@@ -278,4 +281,3 @@ function gatekeeper_is_valid_invite_key($invite_key) {
     // Return true if the invite key is found and valid, otherwise false
     return !empty($result);
 }
-
