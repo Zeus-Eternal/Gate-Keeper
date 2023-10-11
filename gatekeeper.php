@@ -153,11 +153,11 @@ function gatekeeper_insert_invited_user($invitation_details, $invitee_id) {
         $wpdb->prefix . 'gatekeeper_invited_users',
         array(
             'invite_key' => $invitation_details->invite_key,
-            'invite_status' => $invitation_details->invite_status,
-            'inviter_id' => $invitation_details->inviter_id,
+            'invite_status' => 'Accepted', // Marking as accepted for existing users
+            'inviter_id' => 0, // Default to 0, since we don't know the inviter
             'invitee_id' => $invitee_id,
             'user_role' => $invitation_details->user_role,
-            'usage_limit' => $invitation_details->usage_limit,
+            'usage_limit' => 0, // Initialize usage limit to 0
             'key_exp_acc' => $invitation_details->key_exp_acc,
             'created_at' => current_time('mysql'),
         )
@@ -284,65 +284,64 @@ function gatekeeper_create_tables() {
 register_activation_hook(__FILE__, 'gatekeeper_create_tables');
 
 // Function to populate gatekeeper_invited_users with existing members
-function gatekeeper_populate_existing_users() {
+function gatekeeper_populate_existing_members() {
     global $wpdb;
+    
+    $user_query = new WP_User_Query(array(
+        'fields' => array('ID')
+    ));
 
-    // Define the table names for invited users and invite keys
-    $invited_users_table = $wpdb->prefix . 'gatekeeper_invited_users';
-    $invite_keys_table = $wpdb->prefix . 'gatekeeper_invite_keys';
+    $users = $user_query->get_results();
 
-    // Get all existing users except administrators
-    $users = get_users(array('role__not_in' => 'administrator'));
-
-    // Assuming the admin ID is 1. Replace with the actual admin ID if different.
-    $admin_id = 1;
-
-    // Iterate through each existing user
     foreach ($users as $user) {
-        $invite_key = gatekeeper_generate_invite_key(); // Generate a new invite key
+        $user_id = $user->ID;
+        $user_data = get_userdata($user_id);
+        $user_role = array_shift($user_data->roles);
+
+        // Generate an invite key for each existing user
+        $invite_key = gatekeeper_generate_invite_key();
 
         // Insert invite key into the database for each existing member
-        $insert_key_result = $wpdb->insert(
-            $invite_keys_table,
+        $insert_result = $wpdb->insert(
+            $wpdb->prefix . 'gatekeeper_invite_keys',
             array(
                 'invite_key' => $invite_key,
-                'user_id' => $user->ID,
-                'user_role' => implode(',', $user->roles), // Save all roles as a comma-separated string
+                'user_id' => $user_id,
+                'user_role' => $user_role,
                 'invite_status' => 'Active',
                 'usage_limit' => 0, // Initialize usage limit to 0
-                'inviter_id' => $admin_id, // The admin is the initial inviter
+                'inviter_id' => $user_id, // The user is the initial inviter
                 'key_exp_acc' => null, // Initialize key access expiration
                 'key_exp_date' => null, // Initialize key expiration date
-                'created_at' => current_time('mysql'),
             )
         );
 
-        if ($insert_key_result === false) {
-            // An error occurred while inserting the invite key data
-            error_log("Error inserting invite key for existing user {$user->ID}: " . $wpdb->last_error);
-        }
+        if ($insert_result === false) {
+            // An error occurred while inserting data
+            error_log("Error inserting invite key for existing user $user_id: " . $wpdb->last_error);
+        } else {
+            // Populate table with existing user data
+            $insert_result = $wpdb->insert(
+                $wpdb->prefix . 'gatekeeper_invited_users',
+                array(
+                    'invite_key' => $invite_key,
+                    'invite_status' => 'Accepted', // Assuming status is 'Accepted' for existing users
+                    'inviter_id' => 0, // 0 or some default value, since we don't know the inviter
+                    'invitee_id' => $user_id,
+                    'user_role' => $user_role,
+                    'usage_limit' => 0, // Initialize usage limit to 0
+                    'key_exp_acc' => null, // Initialize key access expiration
+                    'created_at' => current_time('mysql')
+                )
+            );
 
-        // Insert an entry into the invited users table for each existing user
-        $insert_user_result = $wpdb->insert(
-            $invited_users_table,
-            array(
-                'invite_key' => $invite_key,
-                'invite_status' => 'Accepted', // Assuming status is 'Accepted' for existing users
-                'inviter_id' => $admin_id, // The admin is the inviter
-                'invitee_id' => $user->ID,
-                'user_role' => implode(',', $user->roles), // Save all roles as a comma-separated string
-                'usage_limit' => 0, // Initialize usage limit to 0
-                'key_exp_acc' => null, // Initialize key access expiration
-                'created_at' => current_time('mysql'),
-            )
-        );
-
-        if ($insert_user_result === false) {
-            // An error occurred while inserting the invited user data
-            error_log("Error inserting invited user data for existing user {$user->ID}: " . $wpdb->last_error);
+            if ($insert_result === false) {
+                // An error occurred while inserting data
+                error_log("Error populating invite for existing user $user_id: " . $wpdb->last_error);
+            }
         }
     }
 }
 
 // Call the function on plugin activation
-register_activation_hook(__FILE__, 'gatekeeper_populate_existing_users');
+register_activation_hook(__FILE__, 'gatekeeper_populate_existing_members');
