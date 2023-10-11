@@ -3,7 +3,7 @@
  * Plugin Name: GateKeeper
  * Description: A WordPress plugin for managing invite keys during user registration.
  * Version: 1.0.0
- * Author: Zeus Eternal
+ * Author: Your Name
  */
 
 // Function to add the invite key to the registration form
@@ -28,39 +28,26 @@ function gatekeeper_generate_invite_key($length = 10) {
     return $invite_key;
 }
 
-// Function to generate and assign invite keys to users with a specific role
-function gatekeeper_generate_and_assign_invite_keys($user_id, $count = 5, $role = 'subscriber') {
+// Function to generate and assign invite keys to users
+function gatekeeper_generate_and_assign_invite_keys($user_id, $count = 5) {
     global $wpdb;
-
-    // Define the table names for invite keys and invited users
-    $invite_keys_table = $wpdb->prefix . 'gatekeeper_invite_keys';
-    $invited_users_table = $wpdb->prefix . 'gatekeeper_invited_users';
 
     for ($i = 0; $i < $count; $i++) {
         $invite_key = gatekeeper_generate_invite_key();
-        $inviter_id = get_current_user_id();  // Get the ID of the inviter
-
-        // Get the default WordPress role for the user
-        $default_role = get_option('default_role');
-        $user_role = sanitize_text_field($role);
-
-        // Ensure the selected role exists and is a valid WordPress role
-        if (empty($user_role) || !in_array($user_role, wp_roles()->roles)) {
-            $user_role = $default_role; // Use the default WordPress role
-        }
-
-        // Insert invite key into the database with the user's selected role and inviter's ID
+        $user_role = sanitize_text_field($_POST['user_role']);
+        
+        // Insert invite key into the database with the user's selected role
         $insert_result = $wpdb->insert(
-            $invite_keys_table,
+            $wpdb->prefix . 'gatekeeper_invite_keys',
             array(
                 'invite_key' => $invite_key,
+                'user_id' => $user_id,
                 'user_role' => $user_role,
                 'invite_status' => 'Active',
-                'mem_exp_date' => date('Y-m-d', strtotime('+30 days')), // 30 days from now
-                'key_exp_date' => date('Y-m-d', strtotime('+3 months')), // 3 months from now
-                'created_at' => current_time('mysql'),
-                'user_id' => ($user_id !== 0) ? $user_id : 1, // Default to admin if user_id is 0
-                'inviter_id' => $inviter_id,  // Store the ID of the inviter
+                'usage_limit' => 0, // Initialize usage limit to 0
+                'inviter_id' => $user_id, // The user is the initial inviter
+                'key_exp_acc' => null, // Initialize key access expiration
+                'key_exp_date' => null, // Initialize key expiration date
             )
         );
 
@@ -68,53 +55,186 @@ function gatekeeper_generate_and_assign_invite_keys($user_id, $count = 5, $role 
             // An error occurred while inserting data
             error_log("Error inserting invite key for user $user_id: " . $wpdb->last_error);
         }
-
-        // Insert the relationship into the invited users table
-        $wpdb->insert(
-            $invited_users_table,
-            array(
-                'inviter_id' => $inviter_id,
-                'invitee_id' => $user_id,
-                'role' => $user_role,
-                'mem_exp_date' => date('Y-m-d', strtotime('+30 days')), // 30 days from now
-                'created_at' => current_time('mysql'),
-            )
-        );
     }
 }
 
 // Hook to generate and assign invite keys for new users
 function gatekeeper_generate_invite_keys_for_new_users($user_id) {
-    gatekeeper_generate_and_assign_invite_keys($user_id, 5);
+    gatekeeper_generate_and_assign_invite_keys($user_id);
 }
 add_action('user_register', 'gatekeeper_generate_invite_keys_for_new_users');
 
-// Function to update invite keys for a user
-function gatekeeper_update_invite_keys($user_id, $count = 5) {
-    global $wpdb;
-
-    // Define the table name for invite keys
-    $invite_keys_table = $wpdb->prefix . 'gatekeeper_invite_keys';
-
-    // Delete existing invite keys for the user
-    $wpdb->delete(
-        $invite_keys_table,
-        array('user_id' => $user_id)
-    );
-
-    // Generate and insert new invite keys with the user's selected role
-    gatekeeper_generate_and_assign_invite_keys($user_id, $count);
-}
-
-// Hook to allow users to update their invite keys
-function gatekeeper_update_invite_keys_for_users() {
-    $current_user = wp_get_current_user();
-    if (is_user_logged_in()) {
-        // Allow users to update their invite keys
-        gatekeeper_update_invite_keys($current_user->ID);
+// Function to handle the registration process
+function gatekeeper_registration_process($user_id) {
+    // Check if an invite key was provided during registration
+    if (isset($_POST['invite_key']) && !empty($_POST['invite_key'])) {
+        $invite_key = sanitize_text_field($_POST['invite_key']);
+        
+        // Validate the invite key and get the related invitation details
+        $invitation_details = gatekeeper_validate_invite_key($invite_key);
+        
+        if ($invitation_details) {
+            // Insert the user as an invitee into the invited users table
+            $insert_result = gatekeeper_insert_invited_user($invitation_details, $user_id);
+            
+            if ($insert_result) {
+                // Mark the invite key as used
+                gatekeeper_mark_invite_key_as_used($invite_key, $user_id);
+            }
+        } else {
+            // Handle invalid or expired invite key
+            // You can add error messages or custom handling here
+        }
     }
 }
-add_action('init', 'gatekeeper_update_invite_keys_for_users');
+
+// Hook to process registration and track invitations
+function gatekeeper_process_registration_and_invitations($user_id) {
+    // Process registration
+    gatekeeper_registration_process($user_id);
+    
+    // Track invitations
+    if (isset($_POST['invite_key']) && !empty($_POST['invite_key'])) {
+        $invite_key = sanitize_text_field($_POST['invite_key']);
+        $inviter_id = gatekeeper_get_inviter_id($invite_key);
+        
+        if ($inviter_id) {
+            // Track the user relationship (inviter to invitee)
+            gatekeeper_track_user_relationship($inviter_id, $user_id, $invite_key);
+        }
+    }
+}
+add_action('user_register', 'gatekeeper_process_registration_and_invitations');
+
+// Function to validate the invite key and get invitation details
+function gatekeeper_validate_invite_key($invite_key) {
+    global $wpdb;
+    
+    // Check if the invite key exists and is active
+    $invitation_details = $wpdb->get_row(
+        $wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}gatekeeper_invite_keys WHERE invite_key = %s AND invite_status = 'Active'",
+            $invite_key
+        )
+    );
+    
+    if ($invitation_details) {
+        // Check if the usage limit has been reached
+        if ($invitation_details->usage_limit > 0) {
+            $usage_count = gatekeeper_get_invite_key_usage_count($invite_key);
+            
+            if ($usage_count >= $invitation_details->usage_limit) {
+                // Invite key has reached its usage limit
+                return false;
+            }
+        }
+        
+        // Check if the key access expiration date is valid
+        if ($invitation_details->key_exp_acc && $invitation_details->key_exp_date) {
+            $current_date = current_time('mysql');
+            
+            if ($current_date < $invitation_details->key_exp_acc || $current_date > $invitation_details->key_exp_date) {
+                // Invite key has expired
+                return false;
+            }
+        }
+        
+        return $invitation_details;
+    }
+    
+    return false;
+}
+
+// Function to insert an invitee into the invited users table
+function gatekeeper_insert_invited_user($invitation_details, $invitee_id) {
+    global $wpdb;
+
+    $insert_result = $wpdb->insert(
+        $wpdb->prefix . 'gatekeeper_invited_users',
+        array(
+            'invite_key' => $invitation_details->invite_key,
+            'invite_status' => $invitation_details->invite_status,
+            'inviter_id' => $invitation_details->inviter_id,
+            'invitee_id' => $invitee_id,
+            'user_role' => $invitation_details->user_role,
+            'usage_limit' => $invitation_details->usage_limit,
+            'key_exp_acc' => $invitation_details->key_exp_acc,
+            'created_at' => current_time('mysql'),
+        )
+    );
+
+    return $insert_result !== false;
+}
+
+// Function to get the number of times an invite key has been used
+function gatekeeper_get_invite_key_usage_count($invite_key) {
+    global $wpdb;
+
+    return (int)$wpdb->get_var(
+        $wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->prefix}gatekeeper_invited_users WHERE invite_key = %s",
+            $invite_key
+        )
+    );
+}
+
+// Function to mark an invite key as used
+function gatekeeper_mark_invite_key_as_used($invite_key, $invitee_id) {
+    global $wpdb;
+
+    // Increment the usage count for the invite key
+    $wpdb->query(
+        $wpdb->prepare(
+            "UPDATE {$wpdb->prefix}gatekeeper_invite_keys SET usage_limit = usage_limit + 1 WHERE invite_key = %s",
+            $invite_key
+        )
+    );
+
+    // Update the invite status to 'Used'
+    $wpdb->update(
+        $wpdb->prefix . 'gatekeeper_invite_keys',
+        array('invite_status' => 'Used'),
+        array('invite_key' => $invite_key)
+    );
+
+    // Update the inviter ID for the invitee
+    $wpdb->update(
+        $wpdb->prefix . 'gatekeeper_invited_users',
+        array('inviter_id' => $invitee_id),
+        array('invite_key' => $invite_key, 'invitee_id' => $invitee_id)
+    );
+}
+
+// Function to get the inviter ID based on the invite key
+function gatekeeper_get_inviter_id($invite_key) {
+    global $wpdb;
+
+    return (int)$wpdb->get_var(
+        $wpdb->prepare(
+            "SELECT inviter_id FROM {$wpdb->prefix}gatekeeper_invite_keys WHERE invite_key = %s",
+            $invite_key
+        )
+    );
+}
+
+// Function to track user relationships (inviter to invitee)
+function gatekeeper_track_user_relationship($inviter_id, $invitee_id, $invite_key) {
+    global $wpdb;
+
+    $wpdb->insert(
+        $wpdb->prefix . 'gatekeeper_invited_users',
+        array(
+            'invite_key' => $invite_key,
+            'invite_status' => 'Accepted', // Mark the invitation as accepted
+            'inviter_id' => $inviter_id,
+            'invitee_id' => $invitee_id,
+            'user_role' => 'Subscriber', // Set the default role for invitees
+            'usage_limit' => 0, // Initialize usage limit to 0
+            'key_exp_acc' => null, // Initialize key access expiration
+            'created_at' => current_time('mysql'),
+        )
+    );
+}
 
 // Function to create necessary database tables during plugin activation
 function gatekeeper_create_tables() {
@@ -122,260 +242,107 @@ function gatekeeper_create_tables() {
 
     // Define the table name for invite keys
     $invite_keys_table = $wpdb->prefix . 'gatekeeper_invite_keys';
+    $invited_users_table = $wpdb->prefix . 'gatekeeper_invited_users';
 
-    // Define SQL query for creating the invite keys table
+    // Define SQL queries for creating the invite keys and invited users tables
     $invite_keys_sql = "
         CREATE TABLE IF NOT EXISTS $invite_keys_table (
             id INT AUTO_INCREMENT PRIMARY KEY,
             invite_key VARCHAR(255) NOT NULL,
+            user_id INT NOT NULL,
             user_role VARCHAR(255) NOT NULL,
             invite_status VARCHAR(255) NOT NULL,
-            mem_exp_date DATE NOT NULL,
-            key_exp_date DATE NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            user_id INT NOT NULL,
+            usage_limit INT NOT NULL,
             inviter_id INT NOT NULL,
+            key_exp_acc DATETIME,
+            key_exp_date DATETIME,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (invite_key)
         ) ENGINE=InnoDB;
     ";
-
-    // Create the invite keys table
-    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
-    dbDelta($invite_keys_sql);
-
-    // Define the table name for invited users
-    $invited_users_table = $wpdb->prefix . 'gatekeeper_invited_users';
-
-    // Define SQL query for creating the invited users table
+    
     $invited_users_sql = "
         CREATE TABLE IF NOT EXISTS $invited_users_table (
             id INT AUTO_INCREMENT PRIMARY KEY,
+            invite_key VARCHAR(255) NOT NULL,
+            invite_status VARCHAR(255) NOT NULL,
             inviter_id INT NOT NULL,
             invitee_id INT NOT NULL,
-            role VARCHAR(255) NOT NULL,
-            mem_exp_date DATE NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            user_role VARCHAR(255) NOT NULL,
+            usage_limit INT NOT NULL,
+            key_exp_acc DATETIME,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY (invite_key, invitee_id)
         ) ENGINE=InnoDB;
     ";
 
-    // Create the invited users table
+    // Create the invite keys and invited users tables
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+    dbDelta($invite_keys_sql);
     dbDelta($invited_users_sql);
 }
 register_activation_hook(__FILE__, 'gatekeeper_create_tables');
 
-// Function to track user relationships when an invite key is used
-function gatekeeper_track_user_relationships($user_id, $invite_key) {
+// Function to populate gatekeeper_invited_users with existing members
+function gatekeeper_populate_existing_users() {
     global $wpdb;
 
-    // Get the inviter's user ID based on the invite key
-    $inviter_id = $wpdb->get_var(
-        $wpdb->prepare(
-            "SELECT inviter_id FROM " . $wpdb->prefix . "gatekeeper_invite_keys WHERE invite_key = %s",
-            $invite_key
-        )
-    );
+    // Define the table names for invited users and invite keys
+    $invited_users_table = $wpdb->prefix . 'gatekeeper_invited_users';
+    $invite_keys_table = $wpdb->prefix . 'gatekeeper_invite_keys';
 
-    if ($inviter_id) {
-        // Add a user relationship record
-        gatekeeper_add_user_relationship($inviter_id, $user_id);
-    }
-}
+    // Get all existing users except administrators
+    $users = get_users(array('role__not_in' => 'administrator'));
 
-// Hook to track user relationships after user registration
-function gatekeeper_track_user_relationships_after_registration($user_id) {
-    if (isset($_POST['invite_key'])) {
-        $invite_key = sanitize_text_field($_POST['invite_key']);
-        gatekeeper_track_user_relationships($user_id, $invite_key);
-    }
-}
-add_action('user_register', 'gatekeeper_track_user_relationships_after_registration');
+    // Assuming the admin ID is 1. Replace with the actual admin ID if different.
+    $admin_id = 1;
 
-// Function to check user permissions for viewing core content
-function gatekeeper_check_core_content_permissions() {
-    $current_user = wp_get_current_user();
-    
-    // Check if the user has the 'subscriber' role to view core content
-    if (in_array('subscriber', $current_user->roles)) {
-        // User has permission to view core content
-        // You can implement specific actions here for core content
-        echo "User is allowed to view core content: Categories, Posts, Pages<br>";
-    }
-}
+    // Iterate through each existing user
+    foreach ($users as $user) {
+        $invite_key = gatekeeper_generate_invite_key(); // Generate a new invite key
 
-// Function to check user permissions for viewing WooCommerce content
-function gatekeeper_check_woocommerce_permissions() {
-    $current_user = wp_get_current_user();
-    
-    // Check if the user has the 'customer' role to view WooCommerce content
-    if (in_array('customer', $current_user->roles)) {
-        // User has permission to view WooCommerce content
-        // You can implement more specific checks based on your requirements
-        
-        // Example: Check if the user is allowed to view product categories
-        if (gatekeeper_check_permissions($current_user->ID, 'WooCommerce', 'view_product_categories')) {
-            // User can view product categories
-            echo "User is allowed to view WooCommerce product categories.<br>";
+        // Insert invite key into the database for each existing member
+        $insert_key_result = $wpdb->insert(
+            $invite_keys_table,
+            array(
+                'invite_key' => $invite_key,
+                'user_id' => $user->ID,
+                'user_role' => implode(',', $user->roles), // Save all roles as a comma-separated string
+                'invite_status' => 'Active',
+                'usage_limit' => 0, // Initialize usage limit to 0
+                'inviter_id' => $admin_id, // The admin is the initial inviter
+                'key_exp_acc' => null, // Initialize key access expiration
+                'key_exp_date' => null, // Initialize key expiration date
+                'created_at' => current_time('mysql'),
+            )
+        );
+
+        if ($insert_key_result === false) {
+            // An error occurred while inserting the invite key data
+            error_log("Error inserting invite key for existing user {$user->ID}: " . $wpdb->last_error);
+        }
+
+        // Insert an entry into the invited users table for each existing user
+        $insert_user_result = $wpdb->insert(
+            $invited_users_table,
+            array(
+                'invite_key' => $invite_key,
+                'invite_status' => 'Accepted', // Assuming status is 'Accepted' for existing users
+                'inviter_id' => $admin_id, // The admin is the inviter
+                'invitee_id' => $user->ID,
+                'user_role' => implode(',', $user->roles), // Save all roles as a comma-separated string
+                'usage_limit' => 0, // Initialize usage limit to 0
+                'key_exp_acc' => null, // Initialize key access expiration
+                'created_at' => current_time('mysql'),
+            )
+        );
+
+        if ($insert_user_result === false) {
+            // An error occurred while inserting the invited user data
+            error_log("Error inserting invited user data for existing user {$user->ID}: " . $wpdb->last_error);
         }
     }
 }
 
-// Function to check user permissions for viewing both core and WooCommerce content
-function gatekeeper_check_content_permissions() {
-    // Check if the user has permission to view core content
-    gatekeeper_check_core_content_permissions();
-    
-    // Check if the user has permission to view WooCommerce content
-    gatekeeper_check_woocommerce_permissions();
-}
-
-// Example usage: Call the gatekeeper_check_content_permissions function
-// gatekeeper_check_content_permissions();
-
-// Function to add user relationship data
-function gatekeeper_add_user_relationship($inviter_id, $invitee_id) {
-    global $wpdb;
-    
-    // Define the table name for user relationships
-    $relationships_table = $wpdb->prefix . 'gatekeeper_invited_users';
-
-    // Insert user relationship into the database
-    $wpdb->insert(
-        $relationships_table,
-        array(
-            'inviter_id' => $inviter_id,
-            'invitee_id' => $invitee_id,
-            'role' => 'Unassigned',
-            'mem_exp_date' => date('Y-m-d', strtotime('+30 days')), // 30 days from now
-            'created_at' => current_time('mysql'),
-        )
-    );
-}
-
-// Hook to assign invite keys to existing members with admin as the default inviter
-function gatekeeper_assign_invite_keys_to_existing_members() {
-    global $wpdb;
-    
-    // Get all existing users with the 'subscriber' role
-    $existing_users = get_users(array('role' => 'subscriber'));
-
-    // Default inviter ID (admin)
-    $default_inviter_id = 1;
-
-    foreach ($existing_users as $user) {
-        // Generate and assign invite keys to existing users with the default inviter
-        gatekeeper_generate_and_assign_invite_keys($user->ID, 5, 'subscriber');
-        gatekeeper_add_user_relationship($default_inviter_id, $user->ID);
-    }
-}
-add_action('init', 'gatekeeper_assign_invite_keys_to_existing_members');
-
-// Add roles to the database and integrate with WP core roles
-function gatekeeper_add_roles_to_db() {
-    global $wpdb;
-    
-    // Define the table name for invite keys
-    $invite_keys_table = $wpdb->prefix . 'gatekeeper_invite_keys';
-
-    // Get all available WordPress roles
-    $wp_roles = wp_roles();
-    $roles = $wp_roles->roles;
-
-    // Insert each role into the database if it doesn't exist
-    foreach ($roles as $role_name => $role_data) {
-        $wpdb->replace(
-            $invite_keys_table,
-            array(
-                'user_role' => $role_name,
-                'invite_status' => 'Unassigned',
-                'mem_exp_date' => 'Unassigned',
-                'key_exp_date' => 'Unassigned',
-            ),
-            array('%s', '%s', '%s', '%s')
-        );
-    }
-}
-add_action('init', 'gatekeeper_add_roles_to_db');
-
-// Function to create necessary database tables for Invitees
-function gatekeeper_create_invitees_table() {
-    global $wpdb;
-
-    // Define the table name for Invitees
-    $invitees_table = $wpdb->prefix . 'gatekeeper_invitees';
-
-    // Define SQL query for creating the Invitees table
-    $invitees_sql = "
-        CREATE TABLE IF NOT EXISTS $invitees_table (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NOT NULL,
-            invite_key_id INT NOT NULL,
-            keys_available INT DEFAULT 5, // Default to 5 keys
-            FOREIGN KEY (user_id) REFERENCES " . $wpdb->prefix . "users(ID),
-            FOREIGN KEY (invite_key_id) REFERENCES " . $wpdb->prefix . "gatekeeper_invite_keys(id)
-        ) ENGINE=InnoDB;
-    ";
-
-    // Create the Invitees table
-    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
-    dbDelta($invitees_sql);
-}
-register_activation_hook(__FILE__, 'gatekeeper_create_invitees_table');
-
-// Function to create necessary database tables for Permissions
-function gatekeeper_create_permissions_table() {
-    global $wpdb;
-
-    // Define the table name for Permissions
-    $permissions_table = $wpdb->prefix . 'gatekeeper_permissions';
-
-    // Define SQL query for creating the Permissions table
-    $permissions_sql = "
-        CREATE TABLE IF NOT EXISTS $permissions_table (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NOT NULL,
-            content_type VARCHAR(255) NOT NULL,
-            permission_type VARCHAR(255) NOT NULL,
-            allowed TINYINT(1) NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES " . $wpdb->prefix . "users(ID)
-        ) ENGINE=InnoDB;
-    ";
-
-    // Create the Permissions table
-    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
-    dbDelta($permissions_sql);
-}
-register_activation_hook(__FILE__, 'gatekeeper_create_permissions_table');
-
-// Function to check user permissions for viewing content
-function gatekeeper_check_permissions($user_id, $content_type, $permission_type) {
-    global $wpdb;
-    
-    $permissions_table = $wpdb->prefix . 'gatekeeper_permissions';
-
-    $result = $wpdb->get_var(
-        $wpdb->prepare(
-            "SELECT allowed FROM $permissions_table WHERE user_id = %d AND content_type = %s AND permission_type = %s",
-            $user_id,
-            $content_type,
-            $permission_type
-        )
-    );
-
-    return $result === '1';
-}
-
-// Check if a user is allowed to view a specific content
-$user_id = get_current_user_id();
-if (gatekeeper_check_permissions($user_id, 'WP', 'view_post')) {
-    // Logic for when User is allowed to view posts
-    // Implement specific actions here for post content
-}
-
-// Assign at least 50 keys by admin to the database
-function gatekeeper_assign_initial_invite_keys() {
-    for ($i = 0; $i < 50; $i++) {
-        gatekeeper_generate_and_assign_invite_keys(0, 1, 'subscriber'); // Assign keys to admin (user_id = 0)
-    }
-}
-add_action('init', 'gatekeeper_assign_initial_invite_keys');
-?>
+// Call the function on plugin activation
+register_activation_hook(__FILE__, 'gatekeeper_populate_existing_users');
