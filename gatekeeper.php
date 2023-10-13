@@ -36,12 +36,11 @@ function gatekeeper_generate_and_assign_invite_keys($user_id, $count = 5) {
         $invite_key = gatekeeper_generate_invite_key();
         $user_role = sanitize_text_field($_POST['user_role']);
         
-        // Insert invite key into the database with the user's selected role
+        // Insert invite key into the database with the user's selected role and inviter ID
         $insert_result = $wpdb->insert(
             $wpdb->prefix . 'gatekeeper_invite_keys',
             array(
                 'invite_key' => $invite_key,
-                'user_id' => $user_id,
                 'user_role' => $user_role,
                 'invite_status' => 'Active',
                 'usage_limit' => 0, // Initialize usage limit to 0
@@ -153,11 +152,11 @@ function gatekeeper_insert_invited_user($invitation_details, $invitee_id) {
         $wpdb->prefix . 'gatekeeper_invited_users',
         array(
             'invite_key' => $invitation_details->invite_key,
-            'invite_status' => 'Accepted', // Marking as accepted for existing users
-            'inviter_id' => 0, // Default to 0, since we don't know the inviter
+            'invite_status' => $invitation_details->invite_status,
+            'inviter_id' => $invitation_details->inviter_id,
             'invitee_id' => $invitee_id,
             'user_role' => $invitation_details->user_role,
-            'usage_limit' => 0, // Initialize usage limit to 0
+            'usage_limit' => $invitation_details->usage_limit,
             'key_exp_acc' => $invitation_details->key_exp_acc,
             'created_at' => current_time('mysql'),
         )
@@ -249,7 +248,6 @@ function gatekeeper_create_tables() {
         CREATE TABLE IF NOT EXISTS $invite_keys_table (
             id INT AUTO_INCREMENT PRIMARY KEY,
             invite_key VARCHAR(255) NOT NULL,
-            user_id INT NOT NULL,
             user_role VARCHAR(255) NOT NULL,
             invite_status VARCHAR(255) NOT NULL,
             usage_limit INT NOT NULL,
@@ -306,11 +304,10 @@ function gatekeeper_populate_existing_members() {
             $wpdb->prefix . 'gatekeeper_invite_keys',
             array(
                 'invite_key' => $invite_key,
-                'user_id' => $user_id,
                 'user_role' => $user_role,
                 'invite_status' => 'Active',
                 'usage_limit' => 0, // Initialize usage limit to 0
-                'inviter_id' => $user_id, // The user is the initial inviter
+                'inviter_id' => 0, // 0 or some default value, since we don't know the inviter
                 'key_exp_acc' => null, // Initialize key access expiration
                 'key_exp_date' => null, // Initialize key expiration date
             )
