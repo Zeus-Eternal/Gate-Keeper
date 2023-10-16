@@ -1,4 +1,6 @@
 <?php
+namespace GateKeeper;
+
 /**
  * Plugin Name: GateKeeper
  * Description: A WordPress plugin for managing invite keys and temporary access rights during user registration.
@@ -12,14 +14,16 @@ global $wpdb;
 // GateKeeper Class
 class GateKeeper {
     private $wpdb;
-    
+    private $table_prefix;
+
     public function __construct() {
         global $wpdb;
         $this->wpdb = $wpdb;
+        $this->table_prefix = $wpdb->prefix;
 
         // Create necessary database tables and initialize plugin settings on activation
         register_activation_hook(__FILE__, array($this, 'activate_plugin'));
-        
+
         // Remove database tables and perform cleanup on deactivation
         register_deactivation_hook(__FILE__, array($this, 'deactivate_plugin'));
     }
@@ -31,7 +35,7 @@ class GateKeeper {
 
     // Function to create an invite key and store it in the database
     public function create_invite_key($invite_key, $inviter_id, $invitee_id, $inviter_role, $invitee_role) {
-        $table_name = $this->wpdb->prefix . 'gatekeeper_invite_keys';
+        $table_name = $this->table_prefix . 'gatekeeper_invite_keys';
 
         $data_inviter = array(
             'invite_key' => sanitize_text_field($invite_key),
@@ -61,7 +65,7 @@ class GateKeeper {
 
     // Function to store the user role associated with an invite key
     public function store_user_role($invite_key, $user_role) {
-        $table_name = $this->wpdb->prefix . 'gatekeeper_invited_users';
+        $table_name = $this->table_prefix . 'gatekeeper_invited_users';
 
         $data = array(
             'invite_key' => sanitize_text_field($invite_key),
@@ -78,7 +82,7 @@ class GateKeeper {
 
     // Function to insert an invited user into the database
     public function insert_invited_user($invitation_details, $user_id) {
-        $table_name = $this->wpdb->prefix . 'gatekeeper_invited_users';
+        $table_name = $this->table_prefix . 'gatekeeper_invited_users';
 
         $data = array(
             'invite_key' => sanitize_text_field($invitation_details->invite_key),
@@ -97,7 +101,7 @@ class GateKeeper {
 
     // Function to validate an invite key and return invitation details if valid
     public function validate_invite_key($invite_key) {
-        $table_name = $this->wpdb->prefix . 'gatekeeper_invite_keys';
+        $table_name = $this->table_prefix . 'gatekeeper_invite_keys';
 
         $sql = $this->wpdb->prepare(
             "SELECT * FROM $table_name WHERE invite_key = %s AND invite_status = 'Active'",
@@ -115,7 +119,7 @@ class GateKeeper {
 
     // Function to get the inviter's ID from an invite key
     public function get_inviter_id($invite_key) {
-        $table_name = $this->wpdb->prefix . 'gatekeeper_invite_keys';
+        $table_name = $this->table_prefix . 'gatekeeper_invite_keys';
 
         $sql = $this->wpdb->prepare(
             "SELECT inviter_id FROM $table_name WHERE invite_key = %s",
@@ -140,10 +144,10 @@ class GateKeeper {
     // Function to create the plugin's database tables
     public function create_tables() {
         $charset_collate = $this->wpdb->get_charset_collate();
-        $table_name_keys = $this->wpdb->prefix . 'gatekeeper_invite_keys';
-        $table_name_users = $this->wpdb->prefix . 'gatekeeper_invited_users';
-        $table_name_access_logs = $this->wpdb->prefix . 'gatekeeper_access_logs';
-        $table_name_options = $this->wpdb->prefix . 'gatekeeper_options';
+        $table_name_keys = $this->table_prefix . 'gatekeeper_invite_keys';
+        $table_name_users = $this->table_prefix . 'gatekeeper_invited_users';
+        $table_name_access_logs = $this->table_prefix . 'gatekeeper_access_logs';
+        $table_name_options = $this->table_prefix . 'gatekeeper_options';
 
         // SQL statement to create the invite_keys table
         $sql_keys = "CREATE TABLE $table_name_keys (
@@ -201,10 +205,10 @@ class GateKeeper {
 
     // Function to remove the plugin's database tables upon deactivation
     public function deactivate_plugin() {
-        $table_name_keys = $this->wpdb->prefix . 'gatekeeper_invite_keys';
-        $table_name_users = $this->wpdb->prefix . 'gatekeeper_invited_users';
-        $table_name_access_logs = $this->wpdb->prefix . 'gatekeeper_access_logs';
-        $table_name_options = $this->wpdb->prefix . 'gatekeeper_options';
+        $table_name_keys = $this->table_prefix . 'gatekeeper_invite_keys';
+        $table_name_users = $this->table_prefix . 'gatekeeper_invited_users';
+        $table_name_access_logs = $this->table_prefix . 'gatekeeper_access_logs';
+        $table_name_options = $this->table_prefix . 'gatekeeper_options';
 
         $this->wpdb->query("DROP TABLE IF EXISTS $table_name_keys");
         $this->wpdb->query("DROP TABLE IF EXISTS $table_name_users");
@@ -214,7 +218,7 @@ class GateKeeper {
 
     // Function to populate the gatekeeper_access_logs table with dummy content
     public function populate_access_logs() {
-        $table_name = $this->wpdb->prefix . 'gatekeeper_access_logs';
+        $table_name = $this->table_prefix . 'gatekeeper_access_logs';
 
         // Dummy data
         $dummy_data = array(
@@ -240,7 +244,7 @@ class GateKeeper {
 
     // Function to generate and populate the gatekeeper_invited_users table with existing users (excluding the inviter)
     public function populate_invited_users() {
-        $table_name = $this->wpdb->prefix . 'gatekeeper_invited_users';
+        $table_name = $this->table_prefix . 'gatekeeper_invited_users';
 
         // Get existing users (excluding the inviter with ID 1)
         $existing_users = get_users(array(
@@ -269,7 +273,7 @@ class GateKeeper {
 
     // Function to generate and populate the gatekeeper_invite_keys table with a specified number of keys from the inviter
     public function generate_and_populate_invite_keys($count) {
-        $table_name = $this->wpdb->prefix . 'gatekeeper_invite_keys';
+        $table_name = $this->table_prefix . 'gatekeeper_invite_keys';
 
         $inviter_id = 1; // Assuming the inviter is always user ID 1
 
@@ -305,7 +309,7 @@ class GateKeeper {
 
     // Function to generate and populate the gatekeeper_options table with actual data
     public function generate_and_populate_options() {
-        $table_name = $this->wpdb->prefix . 'gatekeeper_options';
+        $table_name = $this->table_prefix . 'gatekeeper_options';
 
         // Define the options and their values
         $options = array(
@@ -331,7 +335,7 @@ class GateKeeper {
 
     // Function to run when the plugin is activated
     public function activate_plugin() {
-        // Create necessary database tables and initialize plugin settings.
+        // Check if tables exist; create them if not
         $this->create_tables();
 
         // Populate the gatekeeper_access_logs table with dummy content
