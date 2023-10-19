@@ -9,11 +9,14 @@
 // Include WordPress database access
 global $wpdb;
 
-// Include registration intergration
-include_once(plugin_dir_path(__FILE__) . '/includes/gatekeeper-registration.php');
+// Include registration integration
+//include_once(plugin_dir_path(__FILE__) . '/includes/gatekeeper-registration.php');
 
 // Include decoder
-include_once(plugin_dir_path(__FILE__) . '/helpers/gatekeeper-decoder.php');
+//include_once(plugin_dir_path(__FILE__) . '/helpers/gatekeeper-decoder.php');
+
+// Include invite key validation
+//include_once(plugin_dir_path(__FILE__) . '/helpers/gatekeeper-invite-key-validation.php');
 
 /**
  * Generate a secure and robust invite key.
@@ -54,18 +57,18 @@ function gatekeeper_generate_invite_key($length = 5) {
     return $invite_key;
 }
 
-// Function to create an invite key
-function gatekeeper_create_invite_key($invite_key, $invitee_id, $inviter_id, $inviter_role, $invitee_role) {
+// // Function to create an invite key and store it in the database
+function gatekeeper_create_invite_key($invite_key, $inviter_id, $invitee_id, $inviter_role, $invitee_role) {
     global $wpdb;
     $table_name = $wpdb->prefix . 'gatekeeper_invite_keys';
 
     $data = array(
         'invite_key' => sanitize_text_field($invite_key),
-        'invitee_id' => intval($invitee_id),
         'inviter_id' => intval($inviter_id),
+        'invitee_id' => intval($invitee_id),
         'inviter_role' => sanitize_text_field($inviter_role),
         'invitee_role' => sanitize_text_field($invitee_role),
-        'invite_status' => 'Active',
+        'invite_status' => 'Available', // Default status
         'key_exp_acc' => null,
         'key_exp_date' => null,
         'created_at' => current_time('mysql'),
@@ -142,13 +145,6 @@ function gatekeeper_get_inviter_id($invite_key) {
 
     return false;
 }
-
-// Function to get the default user role for invited users
-function gatekeeper_get_default_user_role() {
-    // Customize this function to return the desired default role.
-    return 'subscriber';
-}
-
 // Function to create the plugin's database tables
 function gatekeeper_create_tables() {
     global $wpdb;
@@ -483,117 +479,384 @@ function gatekeeper_display_keys_table($atts) {
         echo '</table>';
 
         // Pagination
-        $total_keys = $wpdb->get_var("SELECT COUNT(*) FROM $table_name_keys");
+        $total_keys = $wpdb->query("SELECT COUNT(*) FROM $table_name_keys");
         $total_pages = ceil($total_keys / $per_page);
 
-        if ($total_pages > 1) {
-            echo '<div class="pagination">';
-            for ($i = 1; $i <= $total_pages; $i++) {
-                $class = ($i === $current_page) ? 'current' : '';
-                echo "<a class='page-link $class' href='?page=$i'>$i</a>";
-            }
-            echo '</div>';
-        }
+        echo '<div class="tablenav">';
+        echo '<div class="tablenav-pages">';
+        echo paginate_links(array(
+            'base' => add_query_arg('page', '%#%'),
+            'format' => '',
+            'prev_text' => '&laquo;',
+            'next_text' => '&raquo;',
+            'total' => $total_pages,
+            'current' => $current_page,
+        ));
+        echo '</div>';
+        echo '</div>';
     } else {
-        echo '<p>No keys available.</p>';
+        echo '<p>No invite keys found.</p>';
     }
 
-    return ob_get_clean(); // Return the buffered content
+    $output = ob_get_clean(); // Get the buffered output
+    return $output;
 }
 
-add_shortcode('gatekeeper_display_keys', 'gatekeeper_display_keys_table');
+// Register the shortcode
+add_shortcode('gatekeeper_invite_keys', 'gatekeeper_display_keys_table');
 
-// Shortcode to display currently invited users in a table
-// Shortcode to display currently invited users in a table
-// Shortcode to display invited users in a table with more information and pagination
-function gatekeeper_display_invited_users_table($atts) {
-    global $wpdb;
-    $table_name_users = $wpdb->prefix . 'gatekeeper_invited_users';
+/////////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-    // Define default attributes and parse user attributes
-    $atts = shortcode_atts(array(
-        'per_page' => 10, // Number of users per page
-    ), $atts);
+// // Add a custom menu item to the admin menu
+function gatekeeper_admin_menu() {
+    add_menu_page(
+        'GateKeeper',
+        'GateKeeper',
+        'manage_options',
+        'gatekeeper-settings',
+        'gatekeeper_settings_page'
+    );
+}
 
-    // Validate and sanitize per_page attribute
-    $per_page = absint($atts['per_page']);
+// // Callback function for the settings page
+function gatekeeper_settings_page() {
+    ?>
+    <div class="wrap">
+        <h2>GateKeeper Settings</h2>
+        <p>Configure the settings for the GateKeeper plugin here.</p>
+        <!-- Add your settings options and form here -->
+    </div>
+    <?php
+}
 
-    if ($per_page <= 0) {
-        $per_page = 10; // Use a default value if the provided value is invalid
+// // Hook to add the custom menu item
+add_action('admin_menu', 'gatekeeper_admin_menu');
+
+/////////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// // Function to handle plugin options
+function gatekeeper_handle_options() {
+    if (isset($_POST['gatekeeper_save_settings'])) {
+        // Handle the form submission and save options here
+        // Make sure to validate and sanitize user input
     }
+}
 
-    // Get the current page from the URL query parameter
-    $current_page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
+// // Hook to handle plugin options
+add_action('admin_init', 'gatekeeper_handle_options');
 
-    // Calculate the offset for pagination
-    $offset = ($current_page - 1) * $per_page;
+/////////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-    // Query to retrieve invited users with pagination
-    $query = $wpdb->prepare(
-        "SELECT invitee_id, user_role, invite_key, invite_status, usage_limit FROM $table_name_users
-        WHERE invite_status = 'Active'
-        ORDER BY invitee_id ASC
-        LIMIT %d OFFSET %d",
-        $per_page,
-        $offset
+// // Function to add custom settings fields to the plugin settings page
+function gatekeeper_settings_fields() {
+    // Add your custom settings fields here
+}
+
+// // Hook to add custom settings fields
+add_action('admin_init', 'gatekeeper_settings_fields');
+
+/////////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// // Function to enqueue styles and scripts for the plugin
+function gatekeeper_enqueue_assets() {
+    // Enqueue your styles and scripts here
+}
+
+// // Hook to enqueue styles and scripts
+add_action('admin_enqueue_scripts', 'gatekeeper_enqueue_assets');
+
+/////////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// // Function to add links to the plugin's action links on the Plugins page
+function gatekeeper_plugin_action_links($links) {
+    $settings_link = '<a href="admin.php?page=gatekeeper-settings">Settings</a>';
+    array_unshift($links, $settings_link);
+    return $links;
+}
+
+// // Hook to add action links
+add_filter('plugin_action_links_' . plugin_basename(__FILE__), 'gatekeeper_plugin_action_links');
+
+/////////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// // Function to process invite key submission via AJAX
+function gatekeeper_process_invite_key_submission() {
+    // Check for AJAX request and nonce verification
+    if (isset($_POST['action']) && $_POST['action'] === 'gatekeeper_submit_invite_key' && check_ajax_referer('gatekeeper_nonce', 'security')) {
+        // Handle the invite key submission and validation here
+
+        // Example response:
+        $response = array(
+            'success' => true, // Set to false if validation fails
+            'message' => 'Invite key successfully validated.', // Error message if validation fails
+        );
+
+        // Send the JSON response
+        wp_send_json($response);
+    }
+}
+
+// // Hook to process invite key submission via AJAX
+add_action('wp_ajax_gatekeeper_submit_invite_key', 'gatekeeper_process_invite_key_submission');
+add_action('wp_ajax_nopriv_gatekeeper_submit_invite_key', 'gatekeeper_process_invite_key_submission');
+
+/////////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// // Function to display the invite key submission form
+function gatekeeper_display_invite_key_form() {
+    ob_start(); // Start output buffering
+    ?>
+    <div id="gatekeeper-invite-key-form">
+        <h3>Submit Invite Key</h3>
+        <form id="gatekeeper-invite-key-submit" action="<?php echo admin_url('admin-ajax.php'); ?>" method="post">
+            <input type="text" name="invite_key" id="invite_key" placeholder="Enter your invite key" required>
+            <?php wp_nonce_field('gatekeeper_nonce', 'security'); ?>
+            <input type="hidden" name="action" value="gatekeeper_submit_invite_key">
+            <input type="submit" value="Submit">
+        </form>
+        <div id="gatekeeper-invite-key-response"></div>
+    </div>
+    <script>
+        jQuery(document).ready(function ($) {
+            // Handle invite key submission via AJAX
+            $('#gatekeeper-invite-key-submit').submit(function (e) {
+                e.preventDefault();
+
+                $.ajax({
+                    type: 'POST',
+                    url: '<?php echo admin_url('admin-ajax.php'); ?>',
+                    data: $(this).serialize(),
+                    success: function (response) {
+                        if (response.success) {
+                            // Invite key is valid
+                            $('#gatekeeper-invite-key-response').html('<p class="success">' + response.message + '</p>');
+                        } else {
+                            // Invite key is invalid
+                            $('#gatekeeper-invite-key-response').html('<p class="error">' + response.message + '</p>');
+                        }
+                    }
+                });
+            });
+        });
+    </script>
+    <?php
+    $output = ob_get_clean(); // Get the buffered output
+    return $output;
+}
+
+// // Shortcode to display the invite key submission form
+add_shortcode('gatekeeper_invite_key_form', 'gatekeeper_display_invite_key_form');
+
+/////////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// // Function to log user access to restricted content
+function gatekeeper_log_access($user_id, $access_type, $access_key) {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'gatekeeper_access_logs';
+
+    $data = array(
+        'user_id' => intval($user_id),
+        'access_type' => sanitize_text_field($access_type),
+        'access_key' => sanitize_text_field($access_key),
+        'accessed_at' => current_time('mysql'),
     );
 
-    $users = $wpdb->get_results($query, OBJECT);
+    $format = array(
+        '%d',
+        '%s',
+        '%s',
+        '%s',
+    );
 
-    ob_start(); // Start output buffering
-
-    if (!empty($users)) {
-        echo '<table class="wp-list-table widefat fixed striped">';
-        echo '<thead>';
-        echo '<tr>';
-        echo '<th>User</th>';
-        echo '<th>Role</th>';
-        echo '<th>Invite Key</th>';
-        echo '<th>Key Status</th>';
-        echo '<th>Usage Limit</th>';
-        echo '</tr>';
-        echo '</thead>';
-        echo '<tbody>';
-
-        foreach ($users as $user) {
-            // Get user data by ID
-            $user_data = get_userdata($user->invitee_id);
-            if ($user_data) {
-                $username = esc_html($user_data->user_login);
-            } else {
-                $username = 'N/A';
-            }
-
-            echo '<tr>';
-            echo '<td>' . $username . '</td>';
-            echo '<td>' . esc_html($user->user_role) . '</td>';
-            echo '<td>' . esc_html($user->invite_key) . '</td>';
-            echo '<td>' . esc_html($user->invite_status) . '</td>';
-            echo '<td>' . esc_html($user->usage_limit) . '</td>';
-            echo '</tr>';
-        }
-
-        echo '</tbody>';
-        echo '</table>';
-
-        // Pagination
-        $total_users = $wpdb->get_var("SELECT COUNT(*) FROM $table_name_users WHERE invite_status = 'Active'");
-        $total_pages = ceil($total_users / $per_page);
-
-        if ($total_pages > 1) {
-            echo '<div class="pagination">';
-            for ($i = 1; $i <= $total_pages; $i++) {
-                $class = ($i === $current_page) ? 'current' : '';
-                echo "<a class='page-link $class' href='?page=$i'>$i</a>";
-            }
-            echo '</div>';
-        }
-    } else {
-        echo '<p>No invited users available.</p>';
-    }
-
-    return ob_get_clean(); // Return the buffered content
+    $wpdb->insert($table_name, $data, $format);
 }
 
-add_shortcode('gatekeeper_display_invited_users', 'gatekeeper_display_invited_users_table');
+// // Function to check if a user has access to a specific content based on their role
+function gatekeeper_check_access($user_id, $access_type, $access_key) {
+    // Add your access control logic here
+    // Return true if the user has access, false otherwise
 
+    // Example access control logic:
+    $user = get_user_by('ID', $user_id);
+    $allowed_roles = array('administrator', 'editor', 'contributor'); // Define allowed roles
+
+    if (in_array($user->roles[0], $allowed_roles)) {
+        // User has access if their role is in the allowed_roles array
+        return true;
+    }
+
+    return false;
+}
+
+// // Hook to restrict access to content and log access
+add_action('template_redirect', 'gatekeeper_restrict_access', 10, 3);
+
+// Function to restrict access to content and log access
+function gatekeeper_restrict_access($user_id, $access_type, $access_key) {
+    if (!gatekeeper_check_access($user_id, $access_type, $access_key)) {
+        // User does not have access
+        // Redirect or display an access denied message here
+
+        // Example redirect:
+        wp_redirect(home_url('/access-denied/'));
+        exit();
+    }
+
+    // User has access, log the access
+    gatekeeper_log_access($user_id, $access_type, $access_key);
+}
+
+
+/////////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// // Function to get the default user role for invitees
+function gatekeeper_get_default_user_role() {
+    // Return the default user role for invitees
+    return 'Subscriber'; // Change this to the desired default role
+}
+
+// // Function to set the expiration date for an invite key
+function gatekeeper_set_invite_key_expiration($invite_key, $expiration_date) {
+    // Set the expiration date for the invite key
+    // You can implement this logic using options, user meta, or a custom table
+}
+
+// // Function to get the expiration date for an invite key
+function gatekeeper_get_invite_key_expiration($invite_key) {
+    // Get the expiration date for the invite key
+    // You can implement this logic using options, user meta, or a custom table
+    return null; // Return the expiration date (null if not set)
+}
+
+/////////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// // Function to validate an invite key before registration
+function gatekeeper_validate_invite_key($invite_key) {
+    // Check if the invite key is valid
+    // You can implement this logic using options, user meta, or a custom table
+
+    // Example validation logic:
+    global $wpdb;
+    $table_name_keys = $wpdb->prefix . 'gatekeeper_invite_keys';
+
+    // Query to check if the invite key exists and is available
+    $query = $wpdb->prepare(
+        "SELECT invite_key, invite_status
+        FROM $table_name_keys
+        WHERE invite_key = %s AND invite_status = 'Available'",
+        $invite_key
+    );
+
+    $result = $wpdb->get_row($query);
+
+    if ($result) {
+        // Invite key is valid
+        return true;
+    }
+
+    // Invite key is invalid or already used
+    return false;
+}
+
+// // Function to handle invite key validation during registration
+function gatekeeper_registration_check($errors, $sanitized_user_login, $user_email) {
+    if (isset($_POST['invite_key'])) {
+        $invite_key = sanitize_text_field($_POST['invite_key']);
+
+        // Validate the invite key
+        if (!gatekeeper_validate_invite_key($invite_key)) {
+            // Invalid invite key
+            $errors->add('invalid_invite_key', __('Invalid invite key. Please enter a valid invite key.', 'gatekeeper'));
+        }
+    }
+
+    return $errors;
+}
+
+/////////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// // Function to check if a user has a specific role
+function gatekeeper_user_has_role($user_id, $role) {
+    $user = get_userdata($user_id);
+
+    if ($user && in_array($role, $user->roles)) {
+        return true;
+    }
+
+    return false;
+}
+
+// // Function to add a user to a specific role
+function gatekeeper_add_user_to_role($user_id, $role) {
+    $user = get_userdata($user_id);
+
+    if ($user && !in_array($role, $user->roles)) {
+        $user->add_role($role);
+    }
+}
+
+// // Function to remove a user from a specific role
+function gatekeeper_remove_user_from_role($user_id, $role) {
+    $user = get_userdata($user_id);
+
+    if ($user && in_array($role, $user->roles)) {
+        $user->remove_role($role);
+    }
+}
+
+// // Function to update a user's role
+function gatekeeper_update_user_role($user_id, $new_role) {
+    $user = get_userdata($user_id);
+
+    if ($user) {
+        $user->set_role($new_role);
+    }
+}
+
+// // Function to retrieve all users with a specific role
+function gatekeeper_get_users_with_role($role) {
+    $users = get_users(array(
+        'role' => $role,
+    ));
+
+    return $users;
+}
+
+// // Function to retrieve all user roles
+function gatekeeper_get_all_user_roles() {
+    $roles = wp_roles()->get_names();
+
+    return $roles;
+}
+
+// // Function to add a custom role
+function gatekeeper_add_custom_role($role_name, $role_display_name, $capabilities = array()) {
+    add_role($role_name, $role_display_name, $capabilities);
+}
+
+// // Function to remove a custom role
+function gatekeeper_remove_custom_role($role_name) {
+    remove_role($role_name);
+}
+
+// // Function to add capabilities to a role
+function gatekeeper_add_capabilities_to_role($role_name, $capabilities) {
+    $role = get_role($role_name);
+
+    if ($role) {
+        foreach ($capabilities as $capability) {
+            $role->add_cap($capability);
+        }
+    }
+}
+
+// // Function to remove capabilities from a role
+function gatekeeper_remove_capabilities_from_role($role_name, $capabilities) {
+    $role = get_role($role_name);
+
+    if ($role) {
+        foreach ($capabilities as $capability) {
+            $role->remove_cap($capability);
+        }
+    }
+}
