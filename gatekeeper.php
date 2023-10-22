@@ -9,11 +9,8 @@
 // Include WordPress database access
 global $wpdb;
 
-// Include registration intergration
-include_once(plugin_dir_path(__FILE__) . '/includes/gatekeeper-registration.php');
-
-// Include decoder
-include_once(plugin_dir_path(__FILE__) . '/helpers/gatekeeper-decoder.php');
+// Include Shortcodes
+include_once(plugin_dir_path(__FILE__) . '/includes/shortcodes/gatekeeper-shortcodes.php');
 
 /**
  * Generate a secure and robust invite key.
@@ -55,7 +52,7 @@ function gatekeeper_generate_invite_key($length = 5) {
 }
 
 // Function to create an invite key
-function gatekeeper_create_invite_key($invite_key, $invitee_id, $inviter_id, $inviter_role, $invitee_role) {
+function gatekeeper_create_invite_key($invite_key, $invitee_id, $inviter_id, $inviter_role, $invitee_role, $invitee_email, $unlimited = false) {
     global $wpdb;
     $table_name = $wpdb->prefix . 'gatekeeper_invite_keys';
 
@@ -67,7 +64,10 @@ function gatekeeper_create_invite_key($invite_key, $invitee_id, $inviter_id, $in
         'invitee_role' => sanitize_text_field($invitee_role),
         'invite_status' => 'Active',
         'key_exp_acc' => null,
-        'key_exp_date' => null,
+        'key_exp_date' => ($unlimited) ? null : date('Y-m-d H:i:s', strtotime('+30 days')), // Set expiration date
+        'share_limit' => ($unlimited) ? 0 : 1,   // Set the share limit based on invite key
+        'usage_limit' => ($unlimited) ? 0 : 1,   // Set the usage limit based on invite key
+        'invitee_email' => sanitize_email($invitee_email),  // Store the invitee's email
         'created_at' => current_time('mysql'),
     );
 
@@ -80,520 +80,240 @@ function gatekeeper_create_invite_key($invite_key, $invitee_id, $inviter_id, $in
         '%s',
         '%s',
         '%s',
+        '%d', // Format for share_limit
+        '%d', // Format for usage_limit
+        '%s', // Format for invitee_email
     );
 
     $wpdb->insert($table_name, $data, $format);
 }
 
+// Function to create the "gatekeeper" role with admin privileges
+function gatekeeper_create_gatekeeper_role() {
+    // Get the administrator role
+    $admin_role = get_role('administrator');
 
-// Function to store the user role associated with an invite key
-function gatekeeper_store_user_role($invite_key, $user_role) {
-    global $wpdb;
-    $table_name = $wpdb->prefix . 'gatekeeper_invited_users';
+    // Check if the administrator role exists
+    if ($admin_role) {
+        // Define the capabilities that the "gatekeeper" role should have
+        $capabilities = $admin_role->capabilities;
 
-    $data = array(
-        'invite_key' => sanitize_text_field($invite_key),
-        'user_role' => sanitize_text_field($user_role),
-    );
-
-    $format = array(
-        '%s',
-        '%s',
-    );
-
-    $wpdb->insert($table_name, $data, $format);
+        // Create the "gatekeeper" role and assign capabilities
+        add_role('gatekeeper', 'GateKeeper', $capabilities);
+    }
 }
 
-// Function to insert an invited user into the database
-function gatekeeper_insert_invited_user($invitation_details, $user_id) {
+// Hook to create the "gatekeeper" role with admin privileges
+add_action('init', 'gatekeeper_create_gatekeeper_role');
+
+// Function to populate the plugin's tables with existing WordPress users
+function gatekeeper_populate_tables_with_existing_users() {
     global $wpdb;
-    $table_name = $wpdb->prefix . 'gatekeeper_invited_users';
 
-    $data = array(
-        'invite_key' => sanitize_text_field($invitation_details->invite_key),
-        'invite_status' => 'Accepted',
-        'inviter_id' => gatekeeper_get_inviter_id($invitation_details->invite_key),
-        'user_role' => gatekeeper_get_default_user_role(),
-        'usage_limit' => 0,
-    );
+    // Get all existing users
+    $users = get_users();
 
-    $where = array(
-        'invitee_id' => intval($user_id),
-    );
+    // Loop through users and populate the gatekeeper_invited_users table
+    foreach ($users as $user) {
+        $invite_key = gatekeeper_generate_invite_key();
+        $user_id = $user->ID;
+        $inviter_id = 1; // Admin user ID (you can change this to the actual admin user ID)
+        $inviter_role = 'administrator'; // Admin role
+        $invitee_role = 'gatekeeper'; // Role for invited users
+        $invitee_email = $user->user_email;
 
-    $wpdb->update($table_name, $data, $where);
+        // Create an invite key for the user
+        gatekeeper_create_invite_key($invite_key, $user_id, $inviter_id, $inviter_role, $invitee_role, $invitee_email);
+    }
 }
 
-// Function to get the inviter's ID from an invite key
-function gatekeeper_get_inviter_id($invite_key) {
+// Hook to populate tables with existing WordPress users on plugin activation
+register_activation_hook(__FILE__, 'gatekeeper_populate_tables_with_existing_users');
+
+// Function to add the invite key field to the registration form
+function gatekeeper_add_invite_key_field_to_registration_form() {
+    // Check if the user is not already logged in
+    if (!is_user_logged_in()) {
+        // Get the custom redirect option status
+        $custom_redirect_enabled = get_option('gatekeeper_custom_redirect_enabled');
+        // Add your HTML for the invite key input field here
+        ?>
+        <p>
+            <label for="invite_key">Invite Key:</label>
+            <input type="text" name="invite_key" id="invite_key" class="input" value="<?php echo esc_attr(isset($_POST['invite_key']) ? $_POST['invite_key'] : ''); ?>" required />
+        </p>
+        <?php
+        // Add a hidden field for the custom redirect option
+        if ($custom_redirect_enabled) {
+            ?>
+            <input type="hidden" name="custom_redirect_enabled" value="1" />
+            <?php
+        }
+    }
+}
+
+// Function to validate the invite key during registration
+function gatekeeper_validate_invite_key($errors, $sanitized_user_login, $user_email) {
+    if (!is_user_logged_in()) { // Only validate if the user is not logged in
+        if (empty($_POST['invite_key'])) {
+            // Invite key is required
+            $errors->add('invite_key_error', '<strong>ERROR</strong>: Please enter a valid invite key.');
+        } else {
+            $invite_key = sanitize_text_field($_POST['invite_key']);
+            // Check if the invite key exists and is valid
+            if (!gatekeeper_is_valid_invite_key($invite_key)) {
+                $errors->add('invite_key_error', '<strong>ERROR</strong>: The invite key is invalid.');
+            }
+        }
+    }
+
+    return $errors;
+}
+
+// Function to check if an invite key is valid
+function gatekeeper_is_valid_invite_key($invite_key) {
     global $wpdb;
     $table_name = $wpdb->prefix . 'gatekeeper_invite_keys';
 
     $sql = $wpdb->prepare(
-        "SELECT inviter_id FROM $table_name WHERE invite_key = %s",
-        sanitize_text_field($invite_key)
+        "SELECT invite_status FROM $table_name WHERE invite_key = %s",
+        $invite_key
     );
 
-    $inviter_id = $wpdb->get_var($sql);
+    $invite_status = $wpdb->get_var($sql);
 
-    if ($inviter_id) {
-        return intval($inviter_id);
-    }
-
-    return false;
+    return ($invite_status === 'Active');
 }
 
-// Function to get the default user role for invited users
-function gatekeeper_get_default_user_role() {
-    // Customize this function to return the desired default role.
-    return 'subscriber';
-}
+// Hook to add invite key field to the registration form
+add_action('register_form', 'gatekeeper_add_invite_key_field_to_registration_form');
 
-// Function to create the plugin's database tables
-function gatekeeper_create_tables() {
-    global $wpdb;
-    $charset_collate = $wpdb->get_charset_collate();
-    $table_name_keys = $wpdb->prefix . 'gatekeeper_invite_keys';
-    $table_name_users = $wpdb->prefix . 'gatekeeper_invited_users';
-    $table_name_access_logs = $wpdb->prefix . 'gatekeeper_access_logs';
-    $table_name_options = $wpdb->prefix . 'gatekeeper_options';
+// Hook to validate invite key during registration
+add_filter('registration_errors', 'gatekeeper_validate_invite_key', 10, 3);
 
-    // SQL statement to create the invite_keys table
-    $sql_keys = "CREATE TABLE $table_name_keys (
-        id mediumint(9) NOT NULL AUTO_INCREMENT,
-        invite_key varchar(255) NOT NULL,
-        inviter_id mediumint(9) NOT NULL,
-        invitee_id mediumint(9) NOT NULL,
-        inviter_role varchar(255) NOT NULL,
-        invitee_role varchar(255) NOT NULL,
-        invite_status varchar(255) NOT NULL,
-        key_exp_acc datetime DEFAULT '0000-00-00 00:00:00',
-        key_exp_date datetime DEFAULT '0000-00-00 00:00:00',
-        created_at datetime DEFAULT '0000-00-00 00:00:00',
-        PRIMARY KEY (id),
-        UNIQUE (invite_key)
-    ) $charset_collate;";
+// Function to redirect users after successful registration
+function gatekeeper_registration_redirect($user_id) {
+    // Check if the user is not already logged in
+    if (!is_user_logged_in()) {
+        // Check if the custom redirect option is enabled
+        $custom_redirect_enabled = get_option('gatekeeper_custom_redirect_enabled');
 
-    // SQL statement to create the invited_users table
-    $sql_users = "CREATE TABLE $table_name_users (
-        id mediumint(9) NOT NULL AUTO_INCREMENT,
-        invite_key varchar(255) NOT NULL,
-        invite_status varchar(255) NOT NULL,
-        inviter_id mediumint(9) NOT NULL,
-        invitee_id mediumint(9) NOT NULL,
-        user_role varchar(255) NOT NULL,
-        usage_limit int(11) NOT NULL,
-        PRIMARY KEY (id)
-    ) $charset_collate;";
+        if ($custom_redirect_enabled) {
+            // Redirect to your custom page URL
+            wp_redirect(home_url('/custom-page/')); // Change '/custom-page/' to your desired URL
+        } else {
+            // Use the default WordPress registration redirect
+            wp_redirect(wp_registration_url());
+        }
 
-    // SQL statement to create the access_logs table
-    $sql_access_logs = "CREATE TABLE $table_name_access_logs (
-        id mediumint(9) NOT NULL AUTO_INCREMENT,
-        user_id mediumint(9) NOT NULL,
-        access_type varchar(255) NOT NULL,
-        access_key varchar(255) NOT NULL,
-        accessed_at datetime DEFAULT '0000-00-00 00:00:00',
-        PRIMARY KEY (id)
-    ) $charset_collate;";
-
-    // SQL statement to create the options table (customize based on your requirements)
-    $sql_options = "CREATE TABLE $table_name_options (
-        id mediumint(9) NOT NULL AUTO_INCREMENT,
-        option_name varchar(255) NOT NULL,
-        option_value text,
-        PRIMARY KEY (id)
-    ) $charset_collate;";
-
-    // Create the tables
-    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-    dbDelta($sql_keys);
-    dbDelta($sql_users);
-    dbDelta($sql_access_logs);
-    dbDelta($sql_options);
-
-    // Populate the gatekeeper_access_logs table with dummy content
-    gatekeeper_populate_access_logs();
-
-    // Populate the gatekeeper_invited_users table with existing users (excluding the inviter)
-    gatekeeper_populate_invited_users();
-
-    // Generate and populate the gatekeeper_invite_keys table with 20 random keys from the inviter
-    gatekeeper_generate_and_populate_invite_keys(20);
-
-    // Generate and populate the gatekeeper_options table with actual data
-    gatekeeper_generate_and_populate_options();
-
-    // Auto-invite all WordPress administrators as GateKeeper (Super User)
-    gatekeeper_auto_invite_admins_as_gatekeepers();
-}
-
-// Function to remove the plugin's database tables upon deactivation
-function gatekeeper_deactivate_plugin() {
-    global $wpdb;
-    $table_name_keys = $wpdb->prefix . 'gatekeeper_invite_keys';
-    $table_name_users = $wpdb->prefix . 'gatekeeper_invited_users';
-    $table_name_access_logs = $wpdb->prefix . 'gatekeeper_access_logs';
-    $table_name_options = $wpdb->prefix . 'gatekeeper_options';
-
-    $wpdb->query("DROP TABLE IF EXISTS $table_name_keys");
-    $wpdb->query("DROP TABLE IF EXISTS $table_name_users");
-    $wpdb->query("DROP TABLE IF EXISTS $table_name_access_logs");
-    $wpdb->query("DROP TABLE IF EXISTS $table_name_options");
-}
-
-// Function to populate the gatekeeper_access_logs table with dummy content
-function gatekeeper_populate_access_logs() {
-    global $wpdb;
-    $table_name = $wpdb->prefix . 'gatekeeper_access_logs';
-
-    // Dummy data
-    $dummy_data = array(
-        array(
-            'user_id' => 1,
-            'access_type' => 'Login',
-            'access_key' => 'login_key_1',
-            'accessed_at' => current_time('mysql'),
-        ),
-        array(
-            'user_id' => 2,
-            'access_type' => 'Page Visit',
-            'access_key' => 'page_key_1',
-            'accessed_at' => current_time('mysql'),
-        ),
-        // Add more dummy data as needed
-    );
-
-    foreach ($dummy_data as $data) {
-        $wpdb->insert($table_name, $data);
+        exit();
     }
 }
 
-// Function to generate and populate the gatekeeper_invited_users table with existing users (excluding the inviter)
-function gatekeeper_populate_invited_users() {
+// Hook to redirect users after successful registration
+add_action('woocommerce_registration_redirect', 'gatekeeper_registration_redirect');
+
+// Function to perform actions after a user has been registered
+function gatekeeper_after_registration($user_id) {
+    // Get the invite key from the registration form
+    $invite_key = isset($_POST['invite_key']) ? sanitize_text_field($_POST['invite_key']) : '';
+
+    // Check if the invite key is not empty
+    if (!empty($invite_key)) {
+        // Insert the user into the gatekeeper_invited_users table
+        $insert_result = gatekeeper_insert_invited_user($invite_key, $user_id);
+
+        // Check if the insertion was successful
+        if ($insert_result === true) {
+            // Remove used invite keys after successful registration
+            gatekeeper_remove_used_invite_key($invite_key);
+
+            // Update invite key status after successful registration
+            gatekeeper_update_invite_key_status($user_id, $invite_key);
+        } else {
+            // Handle the error here, e.g., log it or display an error message
+            // You can use the $insert_result variable to get more information about the error
+            // Example: error_log('Failed to insert user into gatekeeper_invited_users: ' . $insert_result);
+        }
+    }
+}
+
+// Hook to perform actions after a user has been registered
+add_action('user_register', 'gatekeeper_after_registration');
+
+// Function to insert an invited user into the gatekeeper_invited_users table
+function gatekeeper_insert_invited_user($invite_key, $user_id) {
     global $wpdb;
     $table_name = $wpdb->prefix . 'gatekeeper_invited_users';
 
-    // Get existing users (excluding the inviter with ID 1)
-    $existing_users = get_users(array(
-        'exclude' => array(1), // Exclude the inviter with ID 1
-    ));
+    // Check if the invite key exists in the gatekeeper_invite_keys table
+    $key_exists = $wpdb->get_var(
+        $wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->prefix}gatekeeper_invite_keys WHERE invite_key = %s",
+            $invite_key
+        )
+    );
 
-    // Dummy data
-    $dummy_data = array();
-
-    foreach ($existing_users as $user) {
-        $invite_key = gatekeeper_generate_invite_key();
-        $dummy_data[] = array(
+    // If the invite key exists, insert the user into the gatekeeper_invited_users table
+    if ($key_exists > 0) {
+        $data = array(
             'invite_key' => sanitize_text_field($invite_key),
-            'invite_status' => 'Active', // You may set this to 'Pending' initially
-            'inviter_id' => 1, // Assuming the inviter is always user ID 1
-            'invitee_id' => $user->ID,
-            'user_role' => gatekeeper_get_default_user_role(), // Customize the default role as needed
-            'usage_limit' => 0,
+            'invite_status' => 'Active',
+            'inviter_id' => intval($user_id),
+            'user_role' => sanitize_text_field(get_userdata($user_id)->roles[0]),
+            'usage_limit' => 0, // Usage limit is 0 for invited users
         );
-    }
 
-    foreach ($dummy_data as $data) {
-        $wpdb->insert($table_name, $data);
+        $format = array(
+            '%s',
+            '%s',
+            '%d',
+            '%s',
+            '%d',
+        );
+
+        // Insert the user data into the gatekeeper_invited_users table
+        $insert_result = $wpdb->insert($table_name, $data, $format);
+
+        // Return true if the insertion was successful, otherwise return an error message
+        return $insert_result === false ? $wpdb->last_error : true;
+    } else {
+        // Return an error message if the invite key does not exist
+        return 'Invite key does not exist.';
     }
 }
 
-// Function to generate and populate the gatekeeper_invite_keys table with a specified number of keys from the inviter
-function gatekeeper_generate_and_populate_invite_keys($count) {
+// Function to remove used invite keys if they are not "Unlimited"
+function gatekeeper_remove_used_invite_key($invite_key) {
     global $wpdb;
     $table_name = $wpdb->prefix . 'gatekeeper_invite_keys';
 
-    $inviter_id = 1; // Assuming the inviter is always user ID 1
+    // Check if the invite key is not "Unlimited"
+    $sql = $wpdb->prepare(
+        "SELECT share_limit FROM $table_name WHERE invite_key = %s",
+        $invite_key
+    );
 
-    for ($i = 0; $i < $count; $i++) {
-        $invite_key = gatekeeper_generate_invite_key();
+    $share_limit = $wpdb->get_var($sql);
 
-        $data_inviter = array(
+    if ($share_limit !==0) {
+        // If it's not "Unlimited," delete the used key
+        $wpdb->delete($table_name, array('invite_key' => $invite_key));
+    }
+}
+
+// Function to update invite key status after successful registration
+function gatekeeper_update_invite_key_status($user_id, $invite_key) {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'gatekeeper_invite_keys';
+
+    // Update the invite key status to "Used" for the registered user
+    $wpdb->update(
+        $table_name,
+        array('invite_status' => 'Used'),
+        array(
             'invite_key' => sanitize_text_field($invite_key),
-            'inviter_id' => intval($inviter_id),
-            'invitee_id' => 0, // Default value set to NULL unless set to invitee ID
-            'inviter_role' => 'GateKeeper', // Customize the inviter's role as needed
-            'invitee_role' => '', // Initially empty, to be filled when the key is used or pre-assigned as the username for the invitee
-            'invite_status' => 'Available',
-            'key_exp_acc' => null,
-            'key_exp_date' => null,
-            'created_at' => current_time('mysql'),
-        );
-
-        $format = array(
-            '%s',
-            '%d',
-            '%d',
-            '%s',
-            '%s',
-            '%s',
-            '%s',
-            '%s',
-        );
-
-        $wpdb->insert($table_name, $data_inviter, $format);
-    }
-}
-
-// Function to generate and populate the gatekeeper_options table with actual data
-function gatekeeper_generate_and_populate_options() {
-    global $wpdb;
-    $table_name = $wpdb->prefix . 'gatekeeper_options';
-
-    // Define the options and their values
-    $options = array(
-        'option_name_1' => 'option_value_1',
-        'option_name_2' => 'option_value_2',
-        // Add more options as needed
+            'invitee_id' => intval($user_id),
+        )
     );
-
-    foreach ($options as $option_name => $option_value) {
-        $data = array(
-            'option_name' => sanitize_text_field($option_name),
-            'option_value' => sanitize_text_field($option_value),
-        );
-
-        $format = array(
-            '%s',
-            '%s',
-        );
-
-        $wpdb->insert($table_name, $data, $format);
-    }
 }
-
-// Function to run when the plugin is activated
-function gatekeeper_activate_plugin() {
-    // Check if tables exist; create them if not
-    gatekeeper_create_tables();
-}
-
-// Function to auto-invite all WordPress administrators as GateKeeper (Super User)
-function gatekeeper_auto_invite_admins_as_gatekeepers() {
-    global $wpdb;
-
-    $admins = get_users(array('role' => 'administrator'));
-
-    foreach ($admins as $admin) {
-        $invite_key = gatekeeper_generate_invite_key();
-
-        // Create the invite key and store it in the database
-        gatekeeper_create_invite_key($invite_key, 1, $admin->ID, 'GateKeeper', 'GateKeeper');
-        gatekeeper_store_user_role($invite_key, 'GateKeeper');
-
-        // After storing the invite key in the user_role table, remove it from the invite_keys table
-        $table_name_keys = $wpdb->prefix . 'gatekeeper_invite_keys';
-        $wpdb->delete($table_name_keys, array('invite_key' => $invite_key));
-    }
-}
-
-// Include registration intergration
-include_once(plugin_dir_path(__FILE__) . '/helpers/gatekeeper-invite-key-validation.php');
-
-
-// Validate the invite key during registration
-add_filter('registration_errors', 'gatekeeper_registration_check', 10, 3);
-
-// Plugin activation hook
-register_activation_hook(__FILE__, 'gatekeeper_activate_plugin');
-
-// Plugin deactivation hook
-register_deactivation_hook(__FILE__, 'gatekeeper_deactivate_plugin');
-
-
-/////////++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-// // Shortcode to display invite keys in a table with pagination and additional information
-function gatekeeper_display_keys_table($atts) {
-    global $wpdb;
-    $table_name_keys = $wpdb->prefix . 'gatekeeper_invite_keys';
-
-    // Define default attributes and parse user attributes
-    $atts = shortcode_atts(array(
-        'per_page' => 10, // Number of keys per page
-    ), $atts);
-
-    // Validate and sanitize per_page attribute
-    $per_page = absint($atts['per_page']);
-
-    if ($per_page <= 0) {
-        $per_page = 10; // Use a default value if the provided value is invalid
-    }
-
-    // Get the current page from the URL query parameter
-    $current_page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
-
-    // Calculate the offset for pagination
-    $offset = ($current_page - 1) * $per_page;
-
-    // Query to retrieve invite keys with pagination
-    $query = $wpdb->prepare(
-        "SELECT invite_key, inviter_id, inviter_role, invitee_role, invite_status, key_exp_acc, key_exp_date, created_at 
-        FROM $table_name_keys
-        ORDER BY created_at DESC
-        LIMIT %d OFFSET %d",
-        $per_page,
-        $offset
-    );
-
-    $keys = $wpdb->get_results($query, OBJECT);
-
-    ob_start(); // Start output buffering
-
-    if (!empty($keys)) {
-        echo '<table class="wp-list-table widefat fixed striped">';
-        echo '<thead>';
-        echo '<tr>';
-        echo '<th>Invite Key</th>';
-        echo '<th>Inviter</th>';
-        echo '<th>Inviter Role</th>';
-        echo '<th>Assigned Role</th>';
-        echo '<th>Key Status</th>';
-        echo '<th>Invite Duration</th>';
-        echo '<th>Key Expiration</th>';
-        echo '<th>Created At</th>';
-        echo '</tr>';
-        echo '</thead>';
-        echo '<tbody>';
-
-        foreach ($keys as $key) {
-            // Validate and sanitize the invite key and other fields
-            $invite_key = sanitize_text_field($key->invite_key);
-            $inviter_id = intval($key->inviter_id);
-            $inviter_role = sanitize_text_field($key->inviter_role);
-            $invitee_role = sanitize_text_field($key->invitee_role);
-            $invite_status = sanitize_text_field($key->invite_status);
-            $key_exp_acc = sanitize_text_field($key->key_exp_acc);
-            $key_exp_date = sanitize_text_field($key->key_exp_date);
-            $created_at = sanitize_text_field($key->created_at);
-
-            echo '<tr>';
-            echo '<td>' . esc_html($invite_key) . '</td>';
-            echo '<td>' . esc_html(get_user_by('ID', $inviter_id)->display_name) . '</td>';
-            echo '<td>' . esc_html($inviter_role) . '</td>';
-            echo '<td>' . esc_html($invitee_role) . '</td>';
-            echo '<td>' . esc_html($invite_status) . '</td>';
-            echo '<td>' . esc_html($key_exp_acc) . '</td>';
-            echo '<td>' . esc_html($key_exp_date) . '</td>';
-            echo '<td>' . esc_html($created_at) . '</td>';
-            echo '</tr>';
-        }
-
-        echo '</tbody>';
-        echo '</table>';
-
-        // Pagination
-        $total_keys = $wpdb->get_var("SELECT COUNT(*) FROM $table_name_keys");
-        $total_pages = ceil($total_keys / $per_page);
-
-        if ($total_pages > 1) {
-            echo '<div class="pagination">';
-            for ($i = 1; $i <= $total_pages; $i++) {
-                $class = ($i === $current_page) ? 'current' : '';
-                echo "<a class='page-link $class' href='?page=$i'>$i</a>";
-            }
-            echo '</div>';
-        }
-    } else {
-        echo '<p>No keys available.</p>';
-    }
-
-    return ob_get_clean(); // Return the buffered content
-}
-
-add_shortcode('gatekeeper_display_keys', 'gatekeeper_display_keys_table');
-
-// Shortcode to display currently invited users in a table
-// Shortcode to display currently invited users in a table
-// Shortcode to display invited users in a table with more information and pagination
-function gatekeeper_display_invited_users_table($atts) {
-    global $wpdb;
-    $table_name_users = $wpdb->prefix . 'gatekeeper_invited_users';
-
-    // Define default attributes and parse user attributes
-    $atts = shortcode_atts(array(
-        'per_page' => 10, // Number of users per page
-    ), $atts);
-
-    // Validate and sanitize per_page attribute
-    $per_page = absint($atts['per_page']);
-
-    if ($per_page <= 0) {
-        $per_page = 10; // Use a default value if the provided value is invalid
-    }
-
-    // Get the current page from the URL query parameter
-    $current_page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
-
-    // Calculate the offset for pagination
-    $offset = ($current_page - 1) * $per_page;
-
-    // Query to retrieve invited users with pagination
-    $query = $wpdb->prepare(
-        "SELECT invitee_id, user_role, invite_key, invite_status, usage_limit FROM $table_name_users
-        WHERE invite_status = 'Active'
-        ORDER BY invitee_id ASC
-        LIMIT %d OFFSET %d",
-        $per_page,
-        $offset
-    );
-
-    $users = $wpdb->get_results($query, OBJECT);
-
-    ob_start(); // Start output buffering
-
-    if (!empty($users)) {
-        echo '<table class="wp-list-table widefat fixed striped">';
-        echo '<thead>';
-        echo '<tr>';
-        echo '<th>User</th>';
-        echo '<th>Role</th>';
-        echo '<th>Invite Key</th>';
-        echo '<th>Key Status</th>';
-        echo '<th>Usage Limit</th>';
-        echo '</tr>';
-        echo '</thead>';
-        echo '<tbody>';
-
-        foreach ($users as $user) {
-            // Get user data by ID
-            $user_data = get_userdata($user->invitee_id);
-            if ($user_data) {
-                $username = esc_html($user_data->user_login);
-            } else {
-                $username = 'N/A';
-            }
-
-            echo '<tr>';
-            echo '<td>' . $username . '</td>';
-            echo '<td>' . esc_html($user->user_role) . '</td>';
-            echo '<td>' . esc_html($user->invite_key) . '</td>';
-            echo '<td>' . esc_html($user->invite_status) . '</td>';
-            echo '<td>' . esc_html($user->usage_limit) . '</td>';
-            echo '</tr>';
-        }
-
-        echo '</tbody>';
-        echo '</table>';
-
-        // Pagination
-        $total_users = $wpdb->get_var("SELECT COUNT(*) FROM $table_name_users WHERE invite_status = 'Active'");
-        $total_pages = ceil($total_users / $per_page);
-
-        if ($total_pages > 1) {
-            echo '<div class="pagination">';
-            for ($i = 1; $i <= $total_pages; $i++) {
-                $class = ($i === $current_page) ? 'current' : '';
-                echo "<a class='page-link $class' href='?page=$i'>$i</a>";
-            }
-            echo '</div>';
-        }
-    } else {
-        echo '<p>No invited users available.</p>';
-    }
-
-    return ob_get_clean(); // Return the buffered content
-}
-
-add_shortcode('gatekeeper_display_invited_users', 'gatekeeper_display_invited_users_table');
-

@@ -383,9 +383,6 @@ function gatekeeper_auto_invite_admins_as_gatekeepers() {
     }
 }
 
-// Include registration intergration
-include_once(plugin_dir_path(__FILE__) . '/helpers/gatekeeper-invite-key-validation.php');
-
 
 // Validate the invite key during registration
 add_filter('registration_errors', 'gatekeeper_registration_check', 10, 3);
@@ -688,11 +685,16 @@ function gatekeeper_check_access($user_id, $access_type, $access_key) {
     return false;
 }
 
-// // Hook to restrict access to content and log access
-add_action('template_redirect', 'gatekeeper_restrict_access', 10, 3);
+// Hook to restrict access to content and log access
+add_action('template_redirect', 'gatekeeper_restrict_access');
 
 // Function to restrict access to content and log access
-function gatekeeper_restrict_access($user_id, $access_type, $access_key) {
+function gatekeeper_restrict_access() {
+    // Retrieve the user ID, access type, and access key as needed
+    $user_id = get_current_user_id(); // Example: Get the current user's ID
+    $access_type = 'some_value'; // Example: Define the access type
+    $access_key = 'some_key'; // Example: Define the access key
+
     if (!gatekeeper_check_access($user_id, $access_type, $access_key)) {
         // User does not have access
         // Redirect or display an access denied message here
@@ -859,4 +861,47 @@ function gatekeeper_remove_capabilities_from_role($role_name, $capabilities) {
             $role->remove_cap($capability);
         }
     }
+}
+//////////////////////////////////////
+//
+//
+
+
+// Add the invite key input field to the registration form
+function gatekeeper_add_invite_key_field() {
+    ?>
+    <p>
+        <label for="gatekeeper_invite_key">Invite Key:</label>
+        <input type="text" name="gatekeeper_invite_key" id="gatekeeper_invite_key" class="input" required />
+    </p>
+    <?php
+}
+
+add_action('register_form', 'gatekeeper_add_invite_key_field');
+
+// Hook into user registration and process invite key
+function gatekeeper_process_invite_key($user_id) {
+    if (isset($_POST['gatekeeper_invite_key'])) {
+        $invite_key = sanitize_text_field($_POST['gatekeeper_invite_key']);
+        // Replace 'your_key_validation_function' with your actual validation logic
+        $is_valid = your_key_validation_function($invite_key);
+
+        if ($is_valid) {
+            // Store the invite key in user meta for future reference
+            update_user_meta($user_id, 'gatekeeper_invite_key', $invite_key);
+        }
+    }
+}
+
+add_action('user_register', 'gatekeeper_process_invite_key');
+
+// Custom validation function for invite key (replace with your actual logic)
+function your_key_validation_function($invite_key) {
+    // Add your code here to validate the invite key against your database
+    // Return true if the key is valid, otherwise return false
+    // Example:
+    // if ($invite_key_exists_in_database) {
+    //     return true;
+    // }
+    return false;
 }
