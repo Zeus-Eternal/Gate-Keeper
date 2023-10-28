@@ -9,41 +9,35 @@
  * @param bool   $use_special  Whether to include special characters in the invite key.
  * @return string The generated invite key.
  */
-function gatekeeper_generate_invite_key($length = 5, $use_uppercase = true, $use_lowercase = true, $use_numbers = true, $use_special = false) {
-    // Define character sets based on options
-    $uppercase_characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    $lowercase_characters = 'abcdefghijklmnopqrstuvwxyz';
-    $number_characters = '0123456789';
-    $additional_characters = '!@#$%^&*()_+[]{}|;:,.<>?';
 
-    // Initialize the character set for the invite key
-    $characters = '';
+ function gatekeeper_generate_invite_key($length = 5) {
+    // Define characters to use in the invite key
+    $characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    $character_length = strlen($characters);
 
-    // Build the character set based on options
-    if ($use_uppercase) {
-        $characters .= $uppercase_characters;
-    }
-    if ($use_lowercase) {
-        $characters .= $lowercase_characters;
-    }
-    if ($use_numbers) {
-        $characters .= $number_characters;
-    }
-    if ($use_special) {
-        $characters .= $additional_characters;
-    }
-
-    // Check if at least one character set is selected
-    if (empty($characters)) {
-        return ''; // Return an empty string if no character set is selected
-    }
-
-    // Generate a random invite key of the specified length
+    // Initialize the invite key
     $invite_key = '';
-    $max_index = strlen($characters) - 1;
-    for ($i = 0; $i < $length; $i++) {
-        $random_index = mt_rand(0, $max_index);
-        $invite_key .= $characters[$random_index];
+
+    // Generate random bytes securely
+    if (function_exists('random_bytes')) {
+        $bytes = random_bytes($length);
+    } elseif (function_exists('openssl_random_pseudo_bytes')) {
+        $bytes = openssl_random_pseudo_bytes($length, $strong);
+        if (!$strong) {
+            // OpenSSL didn't provide strong randomness, fallback to less secure method
+            $bytes = '';
+        }
+    }
+
+    // If neither random_bytes nor openssl_random_pseudo_bytes is available, fall back to mt_rand
+    if (empty($bytes)) {
+        for ($i = 0; $i < $length; $i++) {
+            $invite_key .= $characters[mt_rand(0, $character_length - 1)];
+        }
+    } else {
+        for ($i = 0; $i < $length; $i++) {
+            $invite_key .= $characters[ord($bytes[$i]) % $character_length];
+        }
     }
 
     return $invite_key;
