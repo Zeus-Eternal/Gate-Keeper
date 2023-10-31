@@ -192,6 +192,7 @@ register_activation_hook(__FILE__, 'gatekeeper_populate_invited_users_table');
 // 2. Populate gatekeeper_invite_keys with 20 keys (without prefix) from admin (10 unlimited usage keys with "spec_" prefix)
 // 2. Populate gatekeeper_invite_keys with 20 keys (without prefix) from admin (10 unlimited usage keys with "spec_" prefix)
 function gatekeeper_populate_invite_keys_table() {
+    global $wpdb;
     global $wpdb, $gk_admin;
     $table_name = $wpdb->prefix . 'gatekeeper_invite_keys';
 
@@ -203,6 +204,8 @@ function gatekeeper_populate_invite_keys_table() {
         for ($i = 0; $i < 10; $i++) {
             $invite_key = 'UNLTD_' . gatekeeper_generate_invite_key(); // Set to 'UNLIMITED' for unlimited usage
             $invitee_id = null; // No invitee for unlimited keys
+            $inviter_id = $gk_admin; // Admin user ID (you can change this to the actual admin user ID)
+            $inviter_role = get_userdata($inviter_id)->roles[0]; // Get the inviter's role
             $inviter_id = $gk_admin; // Admin user ID
             $current_user = wp_get_current_user();
             $inviter_role = $current_user->roles[0]; // Get the inviter's role
@@ -226,6 +229,8 @@ function gatekeeper_populate_invite_keys_table() {
         for ($i = 0; $i < 10; $i++) {
             $invite_key = gatekeeper_generate_invite_key(); // Generate a random invite key
             $invitee_id = null; // No invitee for this key
+            $inviter_id = $gk_admin; // Admin user ID (you can change this to the actual admin user ID)
+            $inviter_role = get_userdata($inviter_id)->roles[0]; // Get the inviter's role
             $inviter_id = $gk_admin; // Admin user ID
             $current_user = wp_get_current_user();
             $inviter_role = $current_user->roles[0]; // Get the inviter's role
@@ -398,7 +403,11 @@ function gatekeeper_is_invite_key_used($invite_key) {
     }
 }
 
+// Hook to associate roles with the "GateKeeper Invite" plugin during plugin activation
+register_activation_hook(__FILE__, 'gatekeeper_associate_roles');
+
 //////////////////////////////////////////////////+++++++++++++++++++++++++++++++++++++++++++++
+//
 //
 // Stage One - Invite Key Entry
 // 
@@ -413,18 +422,21 @@ function gatekeeper_hide_default_registration_form_elements($content) {
 
     return $content;
 }
-
 // Function to add the invite key field to the registration form
 function gatekeeper_add_invite_key_field_to_registration_form() {
     // Check if the user is not already logged in
     if (!is_user_logged_in()) {
         // Get the custom redirect option status
         $custom_redirect_enabled = get_option('gatekeeper_custom_redirect_enabled');
+        
+        // Check if an invite key was previously submitted and stored in a transient
+        $prev_invite_key = get_transient('gatekeeper_prev_invite_key');
+        
         // Add your HTML for the invite key input field here
         ?>
         <p>
             <label for="invite_key">Invite Key:</label>
-            <input type="text" name="invite_key" id="invite_key" class="input" value="<?php echo esc_attr(isset($_POST['invite_key']) ? $_POST['invite_key'] : ''); ?>" required />
+            <input type="text" name="invite_key" id="invite_key" class="input" value="<?php echo esc_attr($prev_invite_key ? $prev_invite_key : (isset($_POST['invite_key']) ? $_POST['invite_key'] : '')); ?>" required />
         </p>
         <?php
         // Add a hidden field for the custom redirect option
@@ -450,7 +462,13 @@ function gatekeeper_add_invite_key_field_to_registration_form() {
     }
 }
 
+
 // Shortcode to display the invite key input form or success message
+/**
+ * Shortcode to display the invite key form.
+ *
+ * Usage: [gatekeeper_invite_key_form]
+ */
 /**
  * Shortcode to display the invite key form.
  *
@@ -459,64 +477,101 @@ function gatekeeper_add_invite_key_field_to_registration_form() {
 function gatekeeper_invite_key_form_shortcode() {
     global $wpdb;
 
-    // Initialize invite key variable
-    $invite_key_value = '';
-
-    // Check if the form was submitted
-    if (isset($_POST['gatekeeper_submit'])) {
-        // Handle form submission here
+    // Check if the user is not already logged in
+    if (!is_user_logged_in()) {
+        // Get the custom redirect option status
+        $custom_redirect_enabled = get_option('gatekeeper_custom_redirect_enabled');
         
-        // Get the entered invite key
-        $invite_key = sanitize_text_field($_POST['invite_key']);
-        
-        // Check if the invite key exists and is valid
-        if (gatekeeper_is_valid_invite_key($invite_key)) {
-            // Set the invite key value for population after redirect
-            $invite_key_value = $invite_key;
+        // Check if PMPro is enabled
+        if (function_exists('pmpro_hasMembershipLevel')) {
+            // Check if the user is a PMPro member
+            $pmpro_member = pmpro_hasMembershipLevel();
             
-            // Redirect to the corresponding registration page
-            if (function_exists('pmpro_getAllLevels')) {
-                $membership_levels = pmpro_getAllLevels();
-                // Check if PMPro membership levels exist
-                if (!empty($membership_levels)) {
-                    foreach ($membership_levels as $level) {
-                        // Check if the invite key matches a level-specific key
-                        if (strpos($invite_key, 'level_' . $level->id . '_') === 0) {
-                            // Redirect to the registration page for the matched level
-                            wp_redirect(pmpro_url('checkout', '?level=' . $level->id));
-                            exit();
+            if (!$pmpro_member) {
+                // User is not a PMPro member, show the invite key form
+                ob_start(); // Start output buffering
+                
+                // Check if an invite key was previously submitted and stored in a transient
+                $prev_invite_key = get_transient('gatekeeper_prev_invite_key');
+                
+                // Add your HTML for the invite key input field here
+                ?>
+                <form id="gatekeeper-invite-key-form" class="gatekeeper-invite-key-form" method="post">
+                    <p>
+                        <label for="invite_key">Invite Key:</label>
+                        <input type="text" name="invite_key" id="invite_key" class="input" value="<?php echo esc_attr($prev_invite_key ? $prev_invite_key : (isset($_POST['invite_key']) ? $_POST['invite_key'] : '')); ?>" required />
+                    </p>
+                    <?php
+                    // Add a hidden field for the custom redirect option
+                    if ($custom_redirect_enabled) {
+                        ?>
+                        <input type="hidden" name="custom_redirect_enabled" value="1" />
+                        <?php
+                    }
+                    ?>
+                    <p>
+                        <input type="submit" name="gatekeeper_submit" class="button" value="Submit" />
+                    </p>
+                </form>
+                <?php
+                
+                $form_html = ob_get_clean(); // Get the buffered output and store it in $form_html
+                
+                // Check if the form was submitted
+                if (isset($_POST['gatekeeper_submit'])) {
+                    // Handle form submission here
+                    
+                    // Get the entered invite key
+                    $invite_key = sanitize_text_field($_POST['invite_key']);
+                    
+                    // Store the invite key in a transient for later use
+                    set_transient('gatekeeper_prev_invite_key', $invite_key, 60 * 5); // Store for 5 minutes
+                    
+                    // Check if the invite key exists and is valid
+                    if (gatekeeper_is_valid_invite_key($invite_key)) {
+                        // Redirect to the corresponding registration page
+                        if (function_exists('pmpro_getAllLevels')) {
+                            $membership_levels = pmpro_getAllLevels();
+                            // Check if PMPro membership levels exist
+                            if (!empty($membership_levels)) {
+                                foreach ($membership_levels as $level) {
+                                    // Check if the invite key matches a level-specific key
+                                    if (strpos($invite_key, 'level_' . $level->id . '_') === 0) {
+                                        // Redirect to the registration page for the matched level
+                                        wp_redirect(pmpro_url('checkout', '?level=' . $level->id));
+                                        exit();
+                                    }
+                                }
+                            }
                         }
+                        
+                        // If no specific level is matched, redirect to the default registration page
+                        wp_redirect(wp_registration_url());
+                        exit();
+                    } else {
+                        // Invite key is invalid, display an error message
+                        $form_html .= '<p class="gatekeeper-error">The invite key is invalid.</p>';
                     }
                 }
+                
+                return $form_html; // Return the form HTML
+            } else {
+                // User is already a PMPro member, display a message or redirect as needed
+                return '<p>You are already a member.</p>';
             }
-            
-            // If no specific level is matched, redirect to the default registration page
-            wp_redirect(wp_registration_url());
-            exit();
         } else {
-            // Invite key is invalid, display an error message
-            $invite_key_value = $invite_key; // Keep the entered value for display
-        }
-    }
-
-    // Get the custom redirect option status
-    $custom_redirect_enabled = get_option('gatekeeper_custom_redirect_enabled');
-
-    // Check if PMPro is enabled
-    if (function_exists('pmpro_hasMembershipLevel')) {
-        // Check if the user is a PMPro member
-        $pmpro_member = pmpro_hasMembershipLevel();
-        
-        if (!$pmpro_member) {
-            // User is not a PMPro member, show the invite key form
+            // PMPro is not enabled, show the invite key form with WP registration
             ob_start(); // Start output buffering
+                
+            // Check if an invite key was previously submitted and stored in a transient
+            $prev_invite_key = get_transient('gatekeeper_prev_invite_key');
             
             // Add your HTML for the invite key input field here
             ?>
             <form id="gatekeeper-invite-key-form" class="gatekeeper-invite-key-form" method="post">
                 <p>
                     <label for="invite_key">Invite Key:</label>
-                    <input type="text" name="invite_key" id="invite_key" class="input" value="<?php echo esc_attr($invite_key_value); ?>" required />
+                    <input type="text" name="invite_key" id="invite_key" class="input" value="<?php echo esc_attr($prev_invite_key ? $prev_invite_key : (isset($_POST['invite_key']) ? $_POST['invite_key'] : '')); ?>" required />
                 </p>
                 <?php
                 // Add a hidden field for the custom redirect option
@@ -534,45 +589,36 @@ function gatekeeper_invite_key_form_shortcode() {
             
             $form_html = ob_get_clean(); // Get the buffered output and store it in $form_html
             
+            // Check if the form was submitted
+            if (isset($_POST['gatekeeper_submit'])) {
+                // Handle form submission here
+                
+                // Get the entered invite key
+                $invite_key = sanitize_text_field($_POST['invite_key']);
+                
+                // Store the invite key in a transient for later use
+                set_transient('gatekeeper_prev_invite_key', $invite_key, 60 * 5); // Store for 5 minutes
+                
+                // Check if the invite key exists and is valid
+                if (gatekeeper_is_valid_invite_key($invite_key)) {
+                    // Redirect to the registration page
+                    wp_redirect(wp_registration_url());
+                    exit();
+                } else {
+                    // Invite key is invalid, display an error message
+                    $form_html .= '<p class="gatekeeper-error">The invite key is invalid.</p>';
+                }
+            }
+            
             return $form_html; // Return the form HTML
-        } else {
-            // User is already a PMPro member, display a message or redirect as needed
-            return '<p>You are already a member.</p>';
         }
     } else {
-        // PMPro is not enabled, show the invite key form with WP registration
-        ob_start(); // Start output buffering
-            
-        // Add your HTML for the invite key input field here
-        ?>
-        <form id="gatekeeper-invite-key-form" class="gatekeeper-invite-key-form" method="post">
-            <p>
-                <label for="invite_key">Invite Key:</label>
-                <input type="text" name="invite_key" id="invite_key" class="input" value="<?php echo esc_attr($invite_key_value); ?>" required />
-            </p>
-            <?php
-            // Add a hidden field for the custom redirect option
-            if ($custom_redirect_enabled) {
-                ?>
-                <input type="hidden" name="custom_redirect_enabled" value="1" />
-                <?php
-            }
-            ?>
-            <p>
-                <input type="submit" name="gatekeeper_submit" class="button" value="Submit" />
-            </p>
-        </form>
-        <?php
-        
-        $form_html = ob_get_clean(); // Get the buffered output and store it in $form_html
-        
-        return $form_html; // Return the form HTML
+        // User is already logged in, display a message or redirect as needed
+        return '<p>You are already logged in.</p>';
     }
 }
 add_shortcode('gatekeeper_invite_key_form', 'gatekeeper_invite_key_form_shortcode');
 
-// Register the shortcode
-add_shortcode('gatekeeper_invite_key_form', 'gatekeeper_invite_key_form_shortcode');
 
 
 // Function to validate the invite key during registration
